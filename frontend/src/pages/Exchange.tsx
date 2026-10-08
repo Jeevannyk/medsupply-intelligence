@@ -186,7 +186,7 @@ function NewPost({ kind, actor, names, act }: { kind: "request" | "offer"; actor
         </label>
         {mine && (
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-muted">
-            You hold <b className="num text-ink">{fmt(mine.physical)}</b> {names.unit(medicine)} ({mine.days_of_cover ?? "–"} d of cover, lead time {mine.lead_days} d)
+            You hold <b className="num text-ink">{fmt(mine.physical)}</b> {names.unit(medicine)}{mine.stock !== mine.physical ? ` (${fmt(mine.stock)} projected after agreed transfers)` : ""} ({mine.days_of_cover ?? "–"} d of cover, lead time {mine.lead_days} d)
             {req ? mine.need > 0 ? <> and need about <b className="num text-ink">{fmt(mine.need)}</b> before resupply.</> : "." : <> with about <b className="num text-ink">{fmt(mine.surplus)}</b> spare.</>}
           </p>
         )}

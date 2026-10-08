@@ -1,0 +1,84 @@
+MEDSUPPLY INTELLIGENCE - FEATURE GAP CHECK
+Source: external improvement list (ChatGPT) checked against the actual codebase.
+Result of audit only. Nothing below has been implemented.
+
+==========================================================
+ALREADY PRESENT (confirmed in code)
+==========================================================
+- Demand forecasting with outbreak/anomaly detection (forecast.py)
+- Stock-out prediction vs supplier lead time (inventory.py, engine.py)
+- Expiry / wastage prediction with reasoning (engine._expiry)
+- MILP redistribution + rescue pass + emergency loans (optimizer.py)
+- 8-check plan verification (engine.verify)
+- Hospital-to-hospital exchange: offers, requests, transfer lifecycle, messages (exchange.py)
+- Transparent priority score with adjustable weights (priority.py)
+- With / without system impact simulation on hidden ground truth (engine._outcome)
+- Assistant grounded in backend tools, Gemini + rule fallback (assistant.py)
+- Human-in-the-loop: AI only proposes, only hospitals approve/dispatch/receive,
+  network admin is read-only, verification runs before send (exchange.py)
+- Per-move plain-English "reason" text (engine._plan)
+- Demand forecast P10/P90 range (forecast.py), shown on Demand page and Scenario page
+
+==========================================================
+PARTIALLY PRESENT (base exists, suggested version is missing)
+==========================================================
+1. Uncertainty / confidence
+   Have: demand P10/P90; days_to_stockout_p90 computed in API.
+   Missing: stockout shown as range (expected / P10 / P90) in UI; confidence %;
+            "shortage avoided: 420 (range 310-510)" per transfer.
+
+2. Plan explanation ("why this transfer")
+   Have: reason string per move (km, hours, days-to-stockout, donor reserve).
+   Missing: "why NOT this alternative" (rejected routes and the constraint that
+            rejected them, e.g. recipient has substitute medicine).
+
+3. Network command center
+   Have: Dashboard KPI strip, sidebar badges, "Plan verified" status.
+   Missing: overall network status level (GREEN/AMBER/RED); ranked
+            "Immediate actions" list; supplier-delay count.
+
+4. Audit trail
+   Have: messages table logs transfer lifecycle events (approve/dispatch/receive).
+   Missing: pipeline decision log (forecast -> anomaly -> risk -> optimiser
+            candidates -> constraints rejected -> verification -> human approval)
+            with timestamps.
+
+5. Decision simulator
+   Have: single "without system" vs "with system (AI plan)" comparison.
+   Missing: multiple plan options side by side (do nothing / Plan A / Plan B)
+            with stockouts, unmet doses, waste per option.
+
+==========================================================
+NOT PRESENT
+==========================================================
+6. "What changed?" intelligence layer
+   No snapshot or diff of analysis between runs (e.g. demand +31%, stockout moved
+   8 -> 5 days, transfer no longer needed, new transfer recommended).
+
+7. Exchange match scores
+   suggest_takers / suggest_donors rank only by usable quantity and distance.
+   No composite score (stock compatibility, urgency, expiry fit, distance,
+   donor safety) and no ranked alternatives.
+
+8. Resilience / stress-test scenarios
+   Only two scenarios exist (outbreak, normal). Missing: supplier delay +3/+7 days,
+   demand +25%/+50%, hospital unavailable, road blocked, outbreak spreads,
+   20% inventory unusable, mass-casualty event, with unmet-dose comparison table.
+
+9. AI decision agent / comparative reasoning
+   Assistant only calls tools and fills templates or rephrases. It cannot answer
+   "why send to X instead of Y" with expected shortage avoided, waste avoided,
+   donor margin, confidence and alternatives.
+
+10. Multi-agent split (Forecast / Supply Risk / Optimisation / Simulation / Operations)
+    Not present. Pipeline is a single deterministic engine. Original advice itself
+    warns against over-using subagents; optional.
+
+==========================================================
+SUGGESTED PRIORITY (from the source list, if built later)
+==========================================================
+P1 Decision simulator (do nothing vs Plan A vs Plan B)
+P2 Explainable optimisation (why this, why not that)
+P3 Resilience scenarios (demand +50%, supplier delay, hospital down)
+P4 Human-in-the-loop approval UI polish (backend already enforces it)
+P5 Change detection + command center

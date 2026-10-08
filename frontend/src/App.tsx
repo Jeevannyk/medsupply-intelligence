@@ -4,6 +4,7 @@ import {
   Menu, Pill, RefreshCw, Scale, Share2, Siren, ArrowLeftRight, X, type LucideIcon,
 } from "lucide-react";
 import { get, post, useApi, weightParams, type Meta, type Overview, type Scenario, type Weights } from "./api";
+import CopilotDock from "./components/CopilotDock";
 import { Button, Loading, Segmented, Select } from "./components/ui";
 import { AppProvider, type Act, type AppState, type Names } from "./context";
 import { go, Link, usePath } from "./router";
@@ -48,7 +49,7 @@ const GROUPS: Group[] = [
     { path: "/medicines", label: "Medicines", title: "Medicine catalogue", sub: "Criticality, shelf life, alternatives and network stock", icon: Pill, page: () => <Medicines /> },
   ] },
   { name: "Assist", items: [
-    { path: "/assistant", label: "AI assistant", title: "Clinical decision copilot", sub: "Plain-language answers grounded in the computed data", icon: Bot, page: () => <Assistant /> },
+    { path: "/assistant", label: "Sentinel AI", title: "Sentinel", sub: "Plain-language answers grounded in the computed data", icon: Bot, page: () => <Assistant /> },
   ] },
 ];
 const ROUTES = GROUPS.flatMap((g) => g.items);
@@ -69,6 +70,7 @@ export default function App() {
   const [version, setVersion] = useState(0);
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null);
   const [menu, setMenu] = useState(false);
+  const [copilot, setCopilot] = useState(() => window.innerWidth >= 1280);
 
   const meta = useApi(() => get<Meta>("/meta"), []);
   const w = weights ?? meta.data?.default_weights ?? {};
@@ -171,7 +173,7 @@ export default function App() {
           </div>
         )}
 
-        <div className="lg:pl-64">
+        <div className={`transition-[padding] duration-200 lg:pl-64 ${copilot ? "xl:pr-96" : ""}`}>
           <header className="sticky top-0 z-20 border-b border-line bg-white/85 backdrop-blur-md">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
               <button className="rounded-lg p-2 hover:bg-slate-100 lg:hidden" onClick={() => setMenu(true)} aria-label="Open menu"><Menu size={20} /></button>
@@ -185,6 +187,7 @@ export default function App() {
                 <option value="NET">Network admin</option>
                 {m.hospitals.map((h) => <option key={h.id} value={h.id}>{h.id} · {h.name}</option>)}
               </Select>
+              <Button variant={copilot ? "subtle" : "secondary"} size="sm" icon={<Bot size={14} />} onClick={() => setCopilot((v) => !v)}>Sentinel</Button>
               <Button variant="secondary" size="sm" icon={<RefreshCw size={14} />} onClick={() => act(() => post("/reset"), "Demo data regenerated")}>Reset demo</Button>
             </div>
           </header>
@@ -198,6 +201,8 @@ export default function App() {
             )}
           </main>
         </div>
+
+        <CopilotDock open={copilot} onClose={() => setCopilot(false)} path={route?.path ?? path} />
 
         {toast && (
           <div role="status" onClick={() => setToast(null)}

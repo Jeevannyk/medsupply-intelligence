@@ -3,7 +3,6 @@ import { NetworkMap } from "../components/charts";
 import { AnimatedNumber, Button, Card, Stat, fmt, inr } from "../components/ui";
 import { useApp } from "../context";
 import { go } from "../router";
-import { AssistantPanel } from "./Assistant";
 import { DemandPanel } from "./Demand";
 import { ExpiryList } from "./Expiry";
 import { InventoryGrid, RiskLegend } from "./Inventory";
@@ -76,8 +75,6 @@ export default function Dashboard() {
           </div>
         </div>
       </Card>
-
-      <AssistantPanel compact />
     </div>
   );
 }

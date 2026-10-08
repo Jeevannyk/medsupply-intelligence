@@ -59,11 +59,11 @@ export function HospitalDetailPage({ id }: { id: string }) {
           <Card title="Medicines" icon={<Building2 size={18} />} subtitle="Stock, forecast and risk at this hospital" flush>
             <div className="overflow-x-auto px-5 pb-5">
               <table className="num w-full text-xs">
-                <thead><tr className="text-left text-muted"><th className="py-2">Medicine</th><th>On hand</th><th>Forecast 7 d</th><th>Runs out</th><th>Lead</th><th>Risk</th><th>Priority</th></tr></thead>
+                <thead><tr className="text-left text-muted"><th className="py-2">Medicine</th><th>Projected stock</th><th>Forecast 7 d</th><th>Runs out</th><th>Lead</th><th>Risk</th><th>Priority</th></tr></thead>
                 <tbody>
                   {d.data.cells.map((c) => (
                     <tr key={c.medicine} className="border-t border-line" title={c.message}>
-                      <td className="py-2 font-medium">{names.mn(c.medicine)}</td><td>{fmt(c.physical)}{c.incoming ? ` (+${fmt(c.incoming)} in)` : ""}{c.outgoing ? ` (−${fmt(c.outgoing)} out)` : ""}</td><td>{fmt(c.forecast_7d)}</td>
+                      <td className="py-2 font-medium">{names.mn(c.medicine)}</td><td>{fmt(c.stock)}<span className="text-muted"> · on hand {fmt(c.physical)}{c.incoming ? ` (+${fmt(c.incoming)} in)` : ""}{c.outgoing ? ` (−${fmt(c.outgoing)} out)` : ""}</span></td><td>{fmt(c.forecast_7d)}</td>
                       <td>{c.days_to_stockout ?? "60+"} d</td><td>{c.lead_days} d</td><td><RiskBadge risk={c.risk} /></td><td className="font-bold">{c.priority.score}</td>
                     </tr>
                   ))}

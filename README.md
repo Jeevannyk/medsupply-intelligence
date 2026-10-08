@@ -64,7 +64,7 @@ cd backend
 .venv\Scripts\python -m pytest -q tests
 ```
 
-Expected: `9 passed`. Tests use a separate temp database, so they never touch `medsupply.db` or a running server. They cover:
+Expected: `20 passed`. Tests use a separate temp database, so they never touch `medsupply.db` or a running server. They cover:
 
 | Test | Checks |
 |---|---|
@@ -77,6 +77,13 @@ Expected: `9 passed`. Tests use a separate temp database, so they never touch `m
 | offer / claim | broadcast offer is matched to takers and claimed; claim creates a pending transfer |
 | request / respond | request reaches donors; donor response creates a transfer awaiting the requester |
 | assistant | answer is built from tool data; priority question routes to the priority tool |
+| selective send | sending one selected move creates exactly one transfer and only that arrow leaves the plan; an empty selection sends nothing (HTTP 400) |
+| admin is read-only | network admin cannot approve, decline, dispatch, receive or cancel (HTTP 400) |
+| stock on receive | donor physical stock falls and recipient's rises only when the recipient confirms receipt |
+| request / offer to one hospital | only the addressed hospital can accept or decline; accepting opens an agreed transfer; donor dispatches, receiver confirms; units conserved |
+| broadcast request / offer | any other hospital may accept; you cannot accept your own; withdrawn or declined items are closed |
+| admin and bad input | the admin cannot post, accept or act; self-addressed, unknown, zero-quantity and unfillable requests are rejected |
+| emergency loans | with no spare stock, red hospitals still get loans, every verification check passes, and each loan explains what the donor keeps |
 
 ### Frontend type-check and build
 
@@ -97,6 +104,8 @@ $body = @{ question = "Which hospitals are at highest shortage risk next week?" 
 
 ### Manual end-to-end check in the UI (about 5 minutes)
 
+The UI is a sidebar app: each item (Dashboard, Inventory, Demand forecast, Shortage risk, Expiry & wastage, Redistribution, Prioritisation, Hospital exchange, Network map, Impact, Scenario test, Hospital nodes, Medicines, AI assistant) opens as its own page in the same tab (`#/route`), and the Dashboard summarises them. The numbered steps below refer to these pages.
+
 Start from **Reset demo**.
 
 1. **KPI strip** shows 3 hospitals at risk, 8 outbreak signals, "✓ all checks".
@@ -105,11 +114,11 @@ Start from **Reset demo**.
 4. **Shortage risk**: sentences like "…runs out of Oseltamivir 75 mg in 5 days (lead time 9 days): an order placed today arrives too late…" plus supplier orders to place today.
 5. **Expiry risk**: A.J. Hospital's Oseltamivir batch, with the stock-vs-demand reasoning. Click **Broadcast surplus offer** (as Network admin).
 6. **Redistribution**: map arrows and move cards with reasons; verification list all ✓; ledger rows where before − out + in = after; network totals unchanged (Oseltamivir 20,000 → 20,000).
-7. **Exchange flow**: click **Send plan to hospitals** (as Network admin), then:
-   - Set **Acting as** to the donor hospital (for example B). It shows "N awaiting you". Click **approve**, then **dispatch**.
-   - Set **Acting as** to the recipient (for example A). Click **receive**. The transfer shows delivered, and in Inventory the stock numbers have moved while the network total is the same.
-   - Open **thread** on a transfer, write a reply, and check the other hospital sees it in Messages.
-8. **Hospital request**: as a hospital, use **Request stock** (Ceftriaxone, 100). A request appears with AI-suggested donors; act as one of them and click **respond**.
+7. **Redistribution and emergency loans**. On Redistribution, as Network admin, tick one or more transfers (or press **Send** on a card) and press **Send selected**. Only those are sent; each leaves the list and the map. When nobody has stock above the normal 14-day safety reserve, the engine adds orange **emergency loans**: a donor with long cover lends what it can spare while keeping enough for its own resupply wait plus a 3-day buffer, and should reorder. Anything still uncovered appears under **Still short after transfers** with a supplier order and, if one is on hand, a substitute medicine.
+8. **Hospital exchange** (switch **Acting as** to a hospital; the admin view is read-only). Each hospital has three tabs:
+   - **Inbox**: *Needs your decision* (network proposals to approve or decline, and requests or offers addressed to you, with Accept or Decline) and *Open to everyone* (broadcast requests and offers from other hospitals; any hospital that can help accepts, choosing a quantity).
+   - **Transfers**: accepting makes the transfer *agreed*. The donor presses **Dispatch**, the receiver presses **Confirm receipt**. In Inventory and the Dashboard the on-hand numbers change only now; before that they show `+incoming` / `−committed out`.
+   - **New request / offer**: ask one hospital or broadcast to all; offer to one hospital or broadcast to all. **Your open posts** can be withdrawn.
 9. **Priority**: pick Ceftriaxone. A ranks above E and H. H ranks lower than its demand suggests because it holds an alternative (Amoxicillin-Clavulanate). Move a weight slider, click **Apply & re-plan**, and watch the ranking and the transfers change.
 10. **Impact**: toggle Before / After outbreak. "With system" shows fewer stock-outs, fewer unmet doses and less waste than "Without".
 11. **Judge scenario** card: 20,000 units, the weekly demand series, per-hospital before/after, and "8/8 verification checks passed".

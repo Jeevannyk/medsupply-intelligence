@@ -22,7 +22,7 @@ export interface Priority {
   alternative: string | null; alternative_spare_days: number; explanation: string;
 }
 export interface Cell {
-  hospital: string; medicine: string; stock: number; on_hand: number; incoming: number; outgoing: number;
+  hospital: string; medicine: string; stock: number; on_hand: number; physical: number; incoming: number; outgoing: number;
   daily_forecast: number; forecast_7d: number; forecast_14d: number; days_of_cover: number | null;
   days_to_stockout: number | null; days_to_stockout_p90: number | null; lead_days: number; risk: Risk;
   need: number; surplus: number; reserve: number; projected_waste: number; waste_value: number;
@@ -30,7 +30,7 @@ export interface Cell {
 }
 export interface Allocation { batch_id: string; qty: number; expires_in_days: number }
 export interface Move {
-  id: string; from: string; to: string; qty: number; hours: number; km: number; kind: "need" | "rescue";
+  id: string; key: string; from: string; to: string; qty: number; hours: number; km: number; kind: "need" | "rescue" | "emergency";
   arrival_day: number; allocations: Allocation[]; medicine: string; unit: string; covers_days: number | null;
   rescued_from_expiry: number; recipient_days_to_stockout: number | null; recipient_lead_days: number;
   recipient_priority: number; text: string; reason: string;
@@ -65,7 +65,7 @@ export interface Overview {
   scenario: Scenario; weights: Weights; today: string; cells: Cell[]; warnings: Cell[];
   spikes: { hospital: string; medicine: string; surge: number; z: number; growth_per_day: number; detected_date: string }[];
   expiry: ExpiryRow[];
-  plan: { moves: Move[]; shortfalls: { hospital: string; medicine: string; need: number; received: number; shortfall: number; priority: number }[] };
+  plan: { moves: Move[]; shortfalls: { hospital: string; medicine: string; need: number; received: number; shortfall: number; priority: number; lead_days: number; alternative: string | null; alternative_spare_days: number }[] };
   verification: Verification;
   orders: { hospital: string; medicine: string; qty: number; arrives_in_days: number; text: string }[];
   outcome: Outcome;
@@ -95,11 +95,11 @@ export interface Transfer {
 }
 export interface Offer {
   id: number; hospital_id: string; medicine_id: string; batch_id: string | null; qty: number; remaining: number;
-  expiry_date: string; note: string; status: string; created_at: string;
+  expiry_date: string; note: string; status: string; created_at: string; target: string | null;
 }
 export interface StockRequest {
   id: number; hospital_id: string; medicine_id: string; qty: number; remaining: number;
-  needed_within_days: number; note: string; status: string; created_at: string;
+  needed_within_days: number; note: string; status: string; created_at: string; target: string | null;
 }
 export interface Board {
   transfers: Transfer[]; offers: Offer[]; requests: StockRequest[]; messages: Message[];
