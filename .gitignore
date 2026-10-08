@@ -1,0 +1,16 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# generated data (recreated by python -m app.generate)
+backend/medsupply.db*
+# Node
+frontend/node_modules/
+frontend/dist/
+# organiser's problem-statement deck (not ours to republish)
+*.pptx
+# secrets / local
+.env
+.env.*
+.claude/
