@@ -154,6 +154,12 @@ class Question(BaseModel):
     scenario: str = "outbreak"
 
 
+class ForecastAnalysis(BaseModel):
+    medicine: str
+    hospital: str = "ALL"
+    scenario: str = "outbreak"
+
+
 @app.get("/api/exchange")
 def board(hospital: str | None = Query(None)):
     return exchange.board(hospital)
@@ -219,6 +225,14 @@ def message(body: Message):
 @app.post("/api/assistant")
 def ask(body: Question):
     return clean(assistant.ask(body.question, check_scenario(body.scenario)))
+
+
+@app.post("/api/analyze/forecast")
+def analyze_forecast(body: ForecastAnalysis):
+    """Plain-language reading of the demand chart currently on screen (AI if Gemini is configured in .env)."""
+    if body.medicine not in engine.M or (body.hospital != "ALL" and body.hospital not in engine.H):
+        raise HTTPException(404, "unknown medicine or hospital")
+    return clean(assistant.analyze_forecast(check_scenario(body.scenario), body.medicine, body.hospital))
 
 
 @app.post("/api/reset")

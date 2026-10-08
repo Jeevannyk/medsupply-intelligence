@@ -102,3 +102,33 @@ def test_assistant_is_grounded(client):
         assert risk["warning"] in a["answer"]
     p = client.post("/api/assistant", json={"question": "Who should get ceftriaxone first?"}).json()
     assert p["tools"][0]["name"] == "priority_ranking"
+
+
+def test_forecast_analysis_describes_current_chart(client):
+    chart = client.get("/api/forecast", params={"medicine": "CEFT", "hospital": "A"}).json()
+    a = client.post("/api/analyze/forecast", json={"medicine": "CEFT", "hospital": "A"}).json()
+    assert a["mode"] == "rules"                       # tests never call Gemini
+    for label in ("What happened", "What to expect", "What to do"):
+        assert label in a["analysis"]
+    assert "How sure" not in a["analysis"]
+    assert f"{chart['next_14d']:,}" in a["analysis"]  # the number on the chart is the number in the text
+    risk = next(c for c in client.get("/api/overview").json()["cells"] if c["hospital"] == "A" and c["medicine"] == "CEFT")
+    assert str(int(risk["days_to_stockout"])) in a["analysis"]
+    assert client.post("/api/analyze/forecast", json={"medicine": "XXX"}).status_code == 404
+    assert client.post("/api/analyze/forecast", json={"medicine": "OSEL", "hospital": "Z"}).status_code == 404
+
+
+def test_medicine_catalogue_reconciles_with_stock_and_expiry(client):
+    o = client.get("/api/overview").json()
+    for med in ("OSEL", "CEFT", "INSU", "ORS"):
+        d = client.get(f"/api/medicines/{med}").json()
+        in_stores = sum(c["physical"] for c in o["cells"] if c["medicine"] == med)
+        assert d["totals"]["units"] == in_stores == sum(b["qty"] for b in d["batches"])
+        assert sum(h["units"] for h in d["hospitals"]) == in_stores
+        days = [b["days_left"] for b in d["batches"]]
+        assert days == sorted(days), "batches must be in expiry order"
+        waste = sum(e["projected_waste"] for e in o["expiry"] if e["medicine"] == med)
+        assert d["totals"]["projected_waste"] == waste
+        assert sum(t["units"] for t in d["timeline"]) == in_stores
+    assert client.get("/api/medicines/OSEL").json()["totals"]["units"] == 20000
+    assert client.get("/api/medicines/XXX").status_code == 404

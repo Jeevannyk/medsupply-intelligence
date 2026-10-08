@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  Activity, Bot, Boxes, Building2, CheckCircle2, CircleAlert, FlaskConical, Hourglass, LayoutDashboard, LineChart, Map as MapIcon,
+  Activity, Bot, Boxes, Building2, CheckCircle2, CircleAlert, Hourglass, LayoutDashboard, LineChart, Map as MapIcon,
   Menu, Pill, RefreshCw, Scale, Share2, Siren, ArrowLeftRight, X, type LucideIcon,
 } from "lucide-react";
 import { get, post, useApi, weightParams, type Meta, type Overview, type Scenario, type Weights } from "./api";
 import CopilotDock from "./components/CopilotDock";
+import NotificationBell from "./components/NotificationBell";
 import { Button, Loading, Segmented, Select } from "./components/ui";
 import { AppProvider, type Act, type AppState, type Names } from "./context";
 import { go, Link, usePath } from "./router";
@@ -14,13 +15,11 @@ import Demand from "./pages/Demand";
 import Exchange from "./pages/Exchange";
 import Expiry from "./pages/Expiry";
 import Hospitals, { HospitalDetailPage } from "./pages/Hospitals";
-import Impact from "./pages/Impact";
 import Inventory from "./pages/Inventory";
 import MapPage from "./pages/MapView";
 import Medicines from "./pages/Medicines";
 import Priority from "./pages/Priority";
 import Redistribution from "./pages/Redistribution";
-import ScenarioPage from "./pages/Scenario";
 import Shortage from "./pages/Shortage";
 
 interface Route { path: string; label: string; title: string; sub: string; icon: LucideIcon; page: () => ReactNode; badge?: "shortage" | "expiry" | "moves" }
@@ -32,19 +31,17 @@ const GROUPS: Group[] = [
   ] },
   { name: "Predict", items: [
     { path: "/inventory", label: "Inventory", title: "Network inventory", sub: "What each hospital holds, how long it lasts, and how it compares with resupply time", icon: Boxes, page: () => <Inventory /> },
-    { path: "/demand", label: "Demand forecast", title: "Demand forecast", sub: "14-day demand per hospital and medicine, with outbreak detection and backtest accuracy", icon: LineChart, page: () => <Demand /> },
+    { path: "/demand", label: "Demand forecast", title: "Demand forecast", sub: "14-day demand per hospital and medicine, with outbreak detection", icon: LineChart, page: () => <Demand /> },
     { path: "/shortage", label: "Shortage risk", title: "Shortage risk", sub: "Which hospital runs out of which medicine, and whether resupply can arrive in time", icon: Siren, page: () => <Shortage />, badge: "shortage" },
     { path: "/expiry", label: "Expiry & wastage", title: "Expiry & wastage", sub: "Stock that will expire before it can be used, and how to rescue it", icon: Hourglass, page: () => <Expiry />, badge: "expiry" },
   ] },
   { name: "Act", items: [
-    { path: "/redistribution", label: "Redistribution", title: "Redistribution engine", sub: "Optimiser-proposed transfers with verification and a balanced ledger", icon: Share2, page: () => <Redistribution />, badge: "moves" },
+    { path: "/redistribution", label: "Redistribution", title: "Redistribution engine", sub: "Optimiser-proposed transfers between hospitals", icon: Share2, page: () => <Redistribution />, badge: "moves" },
     { path: "/priority", label: "Prioritisation", title: "Prioritisation", sub: "Who gets scarce stock first, and why. Adjust the weights live", icon: Scale, page: () => <Priority /> },
     { path: "/exchange", label: "Hospital exchange", title: "Hospital exchange", sub: "Offers, requests, transfers and messages between hospitals", icon: ArrowLeftRight, page: () => <Exchange /> },
     { path: "/map", label: "Network map", title: "Network map", sub: "Transfers and risk on real hospital locations", icon: MapIcon, page: () => <MapPage /> },
   ] },
   { name: "Analyse", items: [
-    { path: "/impact", label: "Impact", title: "Impact", sub: "What happens with and without the system", icon: Activity, page: () => <Impact /> },
-    { path: "/scenario", label: "Scenario test", title: "Scenario test", sub: "20,000 units against a demand ramp of 2,000 → 5,500 per week", icon: FlaskConical, page: () => <ScenarioPage /> },
     { path: "/hospitals", label: "Hospital nodes", title: "Hospital nodes", sub: "All 8 hospitals in the network", icon: Building2, page: () => <Hospitals /> },
     { path: "/medicines", label: "Medicines", title: "Medicine catalogue", sub: "Criticality, shelf life, alternatives and network stock", icon: Pill, page: () => <Medicines /> },
   ] },
@@ -187,6 +184,7 @@ export default function App() {
                 <option value="NET">Network admin</option>
                 {m.hospitals.map((h) => <option key={h.id} value={h.id}>{h.id} · {h.name}</option>)}
               </Select>
+              <NotificationBell />
               <Button variant="secondary" size="sm" icon={<RefreshCw size={14} />} onClick={() => act(() => post("/reset"), "Demo data regenerated")}>Reset demo</Button>
             </div>
           </header>

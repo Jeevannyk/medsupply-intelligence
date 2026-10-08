@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRight, Check, HandCoins, Inbox as InboxIcon, Megaphone, MessageSquare, PackagePlus, Send, Truck, Undo2, X } from "lucide-react";
 import { get, post, useApi, type Board, type Offer, type StockRequest, type Transfer } from "../api";
 import { Button, Card, Empty, Input, Loading, Pill, Segmented, Stat, Stepper, fmt } from "../components/ui";
@@ -21,8 +21,15 @@ const isOffer = (p: Post): p is Offer => "batch_id" in p;
 export default function ExchangePage() {
   const { names, actor, setActor, version, act } = useApp();
   const b = useApi(() => get<Board>("/exchange", { hospital: actor === "NET" ? undefined : actor }), [actor, version]);
-  const [tab, setTab] = useState<"inbox" | "transfers" | "new">("inbox");
+  const [tab, setTab] = useState<"inbox" | "transfers" | "new">(() => {      // a notification can ask for a specific tab
+    try { const t = sessionStorage.getItem("exchangeTab"); sessionStorage.removeItem("exchangeTab"); return t === "transfers" ? "transfers" : "inbox"; } catch { return "inbox"; }
+  });
   const isHosp = actor !== "NET";
+  useEffect(() => {                                           // a notification clicked while this page is already open
+    const on = (e: Event) => { setTab((e as CustomEvent<"inbox" | "transfers">).detail); try { sessionStorage.removeItem("exchangeTab"); } catch { /* ignore */ } };
+    window.addEventListener("exchange-tab", on);
+    return () => window.removeEventListener("exchange-tab", on);
+  }, []);
 
   if (!b.data) return <Loading h="h-80" />;
   const { transfers, offers, requests } = b.data;

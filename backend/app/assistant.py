@@ -312,3 +312,112 @@ class Assistant:
                 res["note"] = f"Gemini unavailable ({type(ex).__name__}); answered from backend data directly."
                 return res
         return self.rules(question, scenario)
+
+    # ------------------------------------------------- forecast chart analysis
+    ANALYZE_SYSTEM = (
+        "You explain a hospital medicine-demand chart to a busy, non-technical hospital administrator. "
+        "Use ONLY the numbers in the facts JSON; never invent, recompute or round differently. "
+        "Use everyday words: say 'likely range' not 'P10-P90', 'sudden jump' not 'anomaly', 'runs out' not 'stock-out'. "
+        "Use risk labels exactly as given. Maximum 100 words. "
+        "Answer in exactly three markdown bullets that start with these bold labels, one or two short sentences each: "
+        "**What happened**, **What to expect**, **What to do**. "
+        "If stock information is present, use it in **What to do**; otherwise say what the administrator should watch."
+    )
+
+    def forecast_facts(self, scenario, medicine, hospital) -> dict:
+        """Everything the chart shows, reduced to a few numbers. All arithmetic happens here, not in the LLM."""
+        e = self.e
+        med = e.M[medicine]
+        s = e.series(scenario, medicine, hospital)
+        hist, fut = s["history"], s["forecast"]
+        actual = [p["actual"] for p in hist]
+        avg = lambda xs: sum(xs) / len(xs) if xs else 0.0
+        last7, base = avg(actual[-7:]), avg(actual[-35:-7])
+        peak = max(hist, key=lambda p: p["actual"])
+        jumps = [p for p in hist if p["anomaly"]]
+        p50 = sum(f["p50"] for f in fut)
+        busiest = max(fut, key=lambda f: f["p50"])
+        facts = {
+            "scope": "the whole hospital network" if hospital == "ALL" else e.H[hospital]["name"],
+            "medicine": med["name"], "unit": med["unit"],
+            "data_shown": "after the outbreak (current data)" if scenario == "outbreak" else "no-outbreak comparison data",
+            "chart_window_days": len(hist),
+            "average_per_day_last_7_days": round(last7),
+            "average_per_day_in_the_4_weeks_before": round(base),
+            "change_last_week_vs_before_percent": round((last7 / base - 1) * 100) if base else None,
+            "highest_day_in_chart": {"date": peak["date"], "units": peak["actual"]},
+            "unusually_high_days_marked_red": len(jumps),
+            "system_flagged_a_sudden_jump_on": s["detected_date"] if s["spike"] else None,
+            "outbreak_began_on": s["outbreak_start"] if s["spike"] else None,
+            "forecast_next_7_days_total": s["next_7d"],
+            "forecast_next_14_days_total": s["next_14d"],
+            "forecast_average_per_day": round(p50 / len(fut)) if fut else None,
+            "forecast_vs_last_week_percent": round((p50 / len(fut) / last7 - 1) * 100) if last7 and fut else None,
+            "forecast_busiest_day": {"date": busiest["date"], "units": round(busiest["p50"])},
+            "units_added_by_outbreak_adjustment_over_14_days": round(p50 - sum(f["gbm"] for f in fut)),
+        }
+        a = e.analysis(scenario)
+        if hospital != "ALL":
+            c = next(c for c in a["cells"] if c["hospital"] == hospital and c["medicine"] == medicine)
+            facts["stock_now"] = {"units_in_stock": c["stock"], "days_until_it_runs_out": c["days_to_stockout"],
+                                  "supplier_lead_time_days": c["lead_days"], "risk": c["risk"],
+                                  "units_that_will_expire_unused": c["projected_waste"]}
+        else:
+            risky = [c for c in a["cells"] if c["medicine"] == medicine and c["risk"] in ("stockout", "critical", "high")]
+            facts["hospitals_at_risk_for_this_medicine"] = [
+                {"hospital": e.H[c["hospital"]]["name"], "days_until_it_runs_out": c["days_to_stockout"],
+                 "supplier_lead_time_days": c["lead_days"], "risk": c["risk"]} for c in risky[:4]] or "none"
+        return facts
+
+    @staticmethod
+    def _analysis_from_facts(f: dict) -> str:
+        """Plain-text version of the same four bullets, used when Gemini is not configured or fails."""
+        u, ch = f["unit"], f["change_last_week_vs_before_percent"]
+        trend = "about the same as" if ch is None or abs(ch) < 5 else f"{abs(ch)}% {'higher' if ch > 0 else 'lower'} than"
+        happened = (f"**What happened** · {f['scope']} used about {f['average_per_day_last_7_days']:,} {u} of {f['medicine']} a day over the last week, "
+                    f"{trend} the four weeks before.")
+        if f["system_flagged_a_sudden_jump_on"]:
+            happened += f" The system flagged a sudden jump on {f['system_flagged_a_sudden_jump_on']}."
+        expect = (f"**What to expect** · about {f['forecast_next_7_days_total']:,} {u} over the next 7 days and {f['forecast_next_14_days_total']:,} over 14 days, "
+                  f"busiest around {f['forecast_busiest_day']['date']}.")
+        sn = f.get("stock_now")
+        if sn:
+            d, lead = sn["days_until_it_runs_out"], sn["supplier_lead_time_days"]
+            if d is not None and d < lead:
+                todo = f"**What to do** · stock runs out in about {int(d)} days but a resupply takes {lead} days, so ask other hospitals for stock now and order today."
+            elif d is not None and d < lead + 7:
+                todo = f"**What to do** · stock lasts about {int(d)} days against a {lead}-day resupply, so plan the next order soon."
+            else:
+                todo = f"**What to do** · stock ({sn['units_in_stock']:,} {u}) comfortably covers the resupply time; keep watching the forecast."
+        else:
+            risky = f.get("hospitals_at_risk_for_this_medicine")
+            todo = ("**What to do** · no hospital is short of this medicine right now; keep watching the forecast." if risky == "none"
+                    else "**What to do** · check these hospitals first: " + "; ".join(f"{r['hospital']} ({r['days_until_it_runs_out']} days left, resupply {r['supplier_lead_time_days']} days)" for r in risky) + ".")
+        return "\n".join(f"* {x}" for x in (happened, expect, todo))
+
+    def analyze_forecast(self, scenario, medicine, hospital) -> dict:
+        facts = self.forecast_facts(scenario, medicine, hospital)
+        out = {"scope": facts["scope"], "medicine": facts["medicine"]}
+        key, model = os.environ.get("GEMINI_API_KEY"), os.environ.get("GEMINI_MODEL")
+        if not key:
+            return out | {"analysis": self._analysis_from_facts(facts), "mode": "rules",
+                          "note": "Add GEMINI_API_KEY and GEMINI_MODEL to backend/.env for an AI-written analysis."}
+        if not model:
+            return out | {"analysis": self._analysis_from_facts(facts), "mode": "rules",
+                          "note": "GEMINI_MODEL is not set in .env; showing the built-in analysis."}
+        try:
+            body = {"systemInstruction": {"parts": [{"text": self.ANALYZE_SYSTEM}]},
+                    "contents": [{"role": "user", "parts": [{"text": "Facts about the chart:\n" + json.dumps(facts, indent=1)}]}],
+                    "generationConfig": {"temperature": 0.3, "maxOutputTokens": 600}}
+            req = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": key})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read())
+            text = "".join(p.get("text", "") for p in data["candidates"][0]["content"].get("parts", [])).strip()
+            if not text:
+                raise ValueError("empty answer")
+            return out | {"analysis": text, "mode": f"gemini:{model}"}
+        except Exception as ex:   # never leave the button without an answer
+            return out | {"analysis": self._analysis_from_facts(facts), "mode": "rules",
+                          "note": f"Gemini unavailable ({type(ex).__name__}); showing the built-in analysis."}

@@ -1,14 +1,32 @@
-import { LineChart as LineIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Info, LineChart as LineIcon, Sparkles, X } from "lucide-react";
 import { Area, Brush, CartesianGrid, ComposedChart, Legend, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { get, useApi, type Series } from "../api";
+import { get, post, useApi, type ForecastAnalysis, type Series } from "../api";
 import { AXIS, C, ChartTooltip, GRID } from "../components/charts";
-import { Card, Loading, Pill, Select, fmt } from "../components/ui";
+import { Button, Card, Loading, Pill, Select, fmt } from "../components/ui";
+import { Markdown } from "./Assistant";
 import { useApp } from "../context";
 
 export function DemandPanel({ compact = false }: { compact?: boolean }) {
-  const { meta, scenario, med, hosp, setMed, setHosp, version } = useApp();
+  const { meta, scenario, med, hosp, setMed, setHosp, version, names } = useApp();
   const s = useApi(() => get<Series>("/forecast", { scenario, medicine: med, hospital: hosp }), [scenario, med, hosp, version]);
   const d = s.data;
+
+  // AI reading of exactly the chart on screen; cleared whenever the medicine, hospital or scenario changes
+  type Ai = { for: string; loading: boolean; text?: string; mode?: string; note?: string; err?: string };
+  const [ai, setAi] = useState<Ai | null>(null);
+  const chartKey = `${scenario}|${med}|${hosp}`;
+  useEffect(() => setAi(null), [chartKey]);
+  const analyze = async () => {
+    const k = chartKey;
+    setAi({ for: k, loading: true });
+    try {
+      const r = await post<ForecastAnalysis>("/analyze/forecast", { scenario, medicine: med, hospital: hosp });
+      setAi((cur) => (cur?.for === k ? { for: k, loading: false, text: r.analysis, mode: r.mode, note: r.note } : cur));
+    } catch (e) {
+      setAi((cur) => (cur?.for === k ? { for: k, loading: false, err: (e as Error).message } : cur));
+    }
+  };
   const data = d ? [
     ...d.history.map((p) => ({ date: p.date.slice(5), actual: p.actual, anomaly: p.anomaly ? p.actual : null })),
     ...d.forecast.map((p) => ({ date: p.date.slice(5), p50: p.p50, band: [p.p10, p.p90], gbm: p.gbm })),
@@ -28,6 +46,7 @@ export function DemandPanel({ compact = false }: { compact?: boolean }) {
           <option value="ALL">Whole network</option>
           {meta.hospitals.map((x) => <option key={x.id} value={x.id}>{x.id} · {x.name}</option>)}
         </Select>
+        {!compact && <Button size="sm" variant="subtle" icon={<Sparkles size={14} />} loading={ai?.loading} onClick={analyze}>Analyze with AI</Button>}
       </>}>
       {!d ? <Loading h={h} /> : (
         <>
@@ -38,6 +57,28 @@ export function DemandPanel({ compact = false }: { compact?: boolean }) {
               ? <Pill tone="red">Spike detected {d.detected_date} · outbreak began {d.outbreak_start}</Pill>
               : <Pill tone="green">No spike detected</Pill>}
           </div>
+          {!compact && ai && (
+            <div className="rise mb-4 rounded-xl border border-brand/20 bg-gradient-to-br from-brand-soft/70 to-white p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-brand-ink">
+                <Sparkles size={14} />AI analysis · {hosp === "ALL" ? "Whole network" : names.hn(hosp)} · {names.mn(med)}
+                <span className="ml-auto flex items-center gap-2">
+                  {ai.mode && <Pill tone="slate">{ai.mode.startsWith("gemini") ? "Gemini" : "built-in"}</Pill>}
+                  <button className="rounded-md p-1 text-muted hover:bg-white hover:text-ink" onClick={() => setAi(null)} aria-label="Dismiss analysis"><X size={14} /></button>
+                </span>
+              </div>
+              {ai.loading ? (
+                <div className="mt-3 flex items-center gap-2 text-xs text-muted">
+                  <span className="flex gap-1">{[0, 1, 2].map((i) => <i key={i} className="size-1.5 animate-bounce rounded-full bg-brand" style={{ animationDelay: `${i * 140}ms` }} />)}</span>
+                  Reading the chart…
+                </div>
+              ) : ai.err ? <p className="mt-2 text-sm text-red-700">{ai.err}</p> : (
+                <>
+                  <div className="mt-2 text-sm text-slate-700"><Markdown text={ai.text ?? ""} /></div>
+                  {ai.note && <p className="mt-2 text-[11px] text-muted">{ai.note}</p>}
+                </>
+              )}
+            </div>
+          )}
           <div className={h}>
             <ResponsiveContainer>
               <ComposedChart data={data} margin={{ left: -8, right: 12, top: 18, bottom: 0 }}>
@@ -72,32 +113,35 @@ export function DemandPanel({ compact = false }: { compact?: boolean }) {
           )}
         </>
       )}
-      {!compact && <Backtest />}
+      {!compact && <ChartGuide />}
     </Card>
   );
 }
 
-function Backtest() {
-  const { ov, med } = useApp();
-  const metrics = ov.metrics.network_by_medicine[med];
+const Swatch = ({ children }: { children: React.ReactNode }) => <span className="mt-1.5 inline-flex h-3 w-9 shrink-0 items-center justify-center">{children}</span>;
+
+/** Plain-language key to the chart above (replaces the old accuracy table). */
+function ChartGuide() {
+  const rows: [React.ReactNode, string, string][] = [
+    [<Swatch key="a"><i className="h-0.5 w-full rounded bg-ink" /></Swatch>, "Actual demand", "units the hospital really used each day."],
+    [<Swatch key="f"><i className="w-full border-t-[3px] border-dashed" style={{ borderColor: C.brand }} /></Swatch>, "Forecast", "the most likely demand for each of the next 14 days. This is what the stock-out warnings are built on."],
+    [<Swatch key="b"><i className="h-3 w-full rounded-sm" style={{ background: C.brand, opacity: 0.25 }} /></Swatch>, "Shaded band", "the likely range (80% interval). A wide band means the forecast is less certain."],
+    [<Swatch key="g"><i className="w-full border-t-2 border-dotted" style={{ borderColor: C.slate }} /></Swatch>, "Model only", "what the model predicts on its own, before the outbreak adjustment lifts it."],
+    [<Swatch key="r"><i className="size-2.5 rounded-full border border-white" style={{ background: C.red }} /></Swatch>, "Red dots", "days when demand jumped well above normal."],
+    [<Swatch key="v"><i className="h-3 w-0 border-l-2 border-dashed" style={{ borderColor: C.orange }} /></Swatch>, "Outbreak starts / Detected", "when demand began to rise, and the day the system flagged it."],
+  ];
   return (
-    <div className="mt-5 overflow-x-auto scroll-thin rounded-xl border border-line">
-      <table className="num w-full text-xs">
-        <caption className="bg-slate-50 px-3 py-2 text-left text-muted">
-          Backtest · last {ov.metrics.holdout_days} days held out · {med} at network level, plus all 48 series
-        </caption>
-        <thead><tr className="text-left text-muted"><th className="px-3 py-2">Method</th><th>{med} WAPE</th><th>{med} MAPE</th><th>All-series MAE</th><th>All-series WAPE</th><th>Spike-series WAPE</th></tr></thead>
-        <tbody>
-          {Object.keys(ov.metrics.overall).map((k) => (
-            <tr key={k} className="border-t border-line">
-              <td className="px-3 py-2 font-medium capitalize">{k.replaceAll("_", " ")}</td>
-              <td>{fmt(metrics?.[k]?.wape, 1)}%</td><td>{fmt(metrics?.[k]?.mape, 1)}%</td>
-              <td>{fmt(ov.metrics.overall[k].mae, 1)}</td><td>{fmt(ov.metrics.overall[k].wape, 1)}%</td>
-              <td>{ov.metrics.spike_series[k] ? `${fmt(ov.metrics.spike_series[k].wape, 1)}%` : "–"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="mt-5 rounded-xl border border-line bg-slate-50/60 px-4 py-3.5">
+      <h3 className="flex items-center gap-1.5 text-xs font-semibold text-ink"><Info size={14} className="text-brand" />How to read this chart</h3>
+      <ul className="mt-2 grid gap-x-8 gap-y-1.5 text-xs leading-5 text-slate-600 md:grid-cols-2">
+        {rows.map(([sw, name, text]) => (
+          <li key={name} className="flex gap-2.5">{sw}<span><b className="font-semibold text-ink">{name}</b> · {text}</span></li>
+        ))}
+      </ul>
+      <p className="mt-2.5 text-xs leading-5 text-muted">
+        Everything right of the <b className="text-slate-700">Today</b> line is a prediction. Drag the handles on the slider under the chart to zoom into any stretch,
+        and use the dropdowns above to switch medicine or hospital.
+      </p>
     </div>
   );
 }

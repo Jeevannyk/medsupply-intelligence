@@ -36,7 +36,7 @@ export function useChat(scenario: Scenario) {
 const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** Bold (**x**) and bullet lists, no raw markdown characters on screen. */
-function Markdown({ text }: { text: string }) {
+export function Markdown({ text }: { text: string }) {
   const bold = (s: string): ReactNode[] => s.split(/\*\*(.+?)\*\*/g).map((p, i) => (i % 2 ? <b key={i} className="font-semibold">{p}</b> : p));
   const blocks: ReactNode[] = [];
   let items: string[] = [];

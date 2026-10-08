@@ -10,7 +10,6 @@ const BY_PAGE: Record<string, string[]> = {
   "/redistribution": ["Why move oseltamivir to Wenlock?", "Who should get ceftriaxone first?"],
   "/priority": ["Who should get ceftriaxone first?", "Which hospitals are at highest shortage risk next week?"],
   "/demand": ["Is there an outbreak?", "How much oseltamivir will we need in the next 7 days?"],
-  "/scenario": ["Check the 20,000 unit scenario", "Is there an outbreak?"],
 };
 
 /** Floating launcher + chat card. The card grows out of the launcher corner; it overlays the page, never pushes it. */

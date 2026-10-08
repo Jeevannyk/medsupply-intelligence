@@ -165,3 +165,5 @@ export function useApi<T>(fn: () => Promise<T>, deps: unknown[]) {
   useEffect(load, [load]);
   return { data, error, loading, reload: load };
 }
+
+export interface ForecastAnalysis { analysis: string; mode: string; note?: string; scope: string; medicine: string }

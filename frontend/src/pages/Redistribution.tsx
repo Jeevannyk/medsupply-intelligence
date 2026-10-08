@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, CheckCircle2, Send, Share2, ShieldCheck, XCircle } from "lucide-react";
+import { ArrowRight, Send, Share2 } from "lucide-react";
 import { post } from "../api";
 import { NetworkMap } from "../components/charts";
 import { Button, Card, Empty, Pill, Select, fmt } from "../components/ui";
@@ -60,7 +60,6 @@ export default function RedistributionPage() {
   const [focus, setFocus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const moves = ov.plan.moves.filter((mv) => filter === "ALL" || mv.medicine === filter);
-  const v = ov.verification;
   const canSend = actor === "NET";
   const gaps = ov.plan.shortfalls.filter((g) => filter === "ALL" || g.medicine === filter);
 
@@ -132,42 +131,6 @@ export default function RedistributionPage() {
         <p className="mt-3 text-[11px] text-muted">{moves.length} proposed transfer{moves.length === 1 ? "" : "s"}. Hover a card to highlight its arrow. A sent transfer leaves this list and the map; track it in the Hospital Exchange.</p>
       </Card>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Card title="Plan verification" icon={<ShieldCheck size={18} />}
-          subtitle={`${v.checks.filter((c) => c.passed).length} of ${v.checks.length} automated checks passed`}
-          actions={<Pill tone={v.passed ? "green" : "red"}>{v.passed ? "✓ verified" : "✗ failed"}</Pill>}>
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {v.checks.map((c) => (
-              <li key={c.name} className={`flex gap-2 rounded-xl border p-2.5 text-xs ${c.passed ? "border-emerald-100 bg-emerald-50/50" : "border-red-200 bg-red-50"}`}>
-                {c.passed ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" /> : <XCircle size={16} className="mt-0.5 shrink-0 text-red-600" />}
-                <span><b className="block">{c.name}</b><span className="text-muted">{c.detail}</span></span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-3 text-xs text-muted">
-            Unmet demand before resupply on affected hospitals: <b className="num text-ink">{fmt(v.summary.unmet_window_before)} → {fmt(v.summary.unmet_window_after)}</b> ·
-            projected waste <b className="num text-ink">{fmt(v.summary.waste_before)} → {fmt(v.summary.waste_after)}</b>
-          </p>
-        </Card>
-
-        <Card title="Ledger" subtitle="before − out + in = after, per hospital and medicine" flush>
-          <div className="max-h-[420px] overflow-auto scroll-thin px-5 pb-5">
-            <table className="num w-full text-xs">
-              <thead className="sticky top-0 bg-white"><tr className="text-left text-muted"><th className="py-2">Hosp</th><th>Med</th><th>Before</th><th>Out</th><th>In</th><th>After</th><th>Stock-out</th><th>Waste</th></tr></thead>
-              <tbody>
-                {v.ledger.filter((r) => filter === "ALL" || r.medicine === filter).map((r) => (
-                  <tr key={r.hospital + r.medicine} className="border-t border-line">
-                    <td className="py-1.5 font-semibold">{r.hospital}</td><td>{r.medicine}</td><td>{fmt(r.before)}</td>
-                    <td className="text-red-600">{r.out ? `−${fmt(r.out)}` : ""}</td><td className="text-emerald-600">{r.in ? `+${fmt(r.in)}` : ""}</td>
-                    <td className="font-bold">{fmt(r.after)}</td><td>{r.dts_before ?? "60+"} → {r.dts_after ?? "60+"} d</td><td>{fmt(r.waste_before)} → {fmt(r.waste_after)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="mt-2 text-[11px] text-muted">Network totals: {v.totals.map((t) => `${t.medicine} ${fmt(t.before)}→${fmt(t.after)}`).join(" · ")}</p>
-          </div>
-        </Card>
-      </div>
     </div>
   );
 }
