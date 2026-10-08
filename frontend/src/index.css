@@ -50,6 +50,20 @@ input[type="range"] { accent-color: var(--color-brand); }
 .card-surface { box-shadow: var(--shadow-card); transition: box-shadow 200ms, transform 200ms, border-color 200ms; }
 .card-hover:hover { box-shadow: var(--shadow-lift); transform: translateY(-2px); border-color: #c9d3f5; }
 
+.card-hover:active { transform: scale(0.985); box-shadow: var(--shadow-card); transition-duration: 90ms; }
+
+/* instant pressed state: responds on pointer-down, not on release */
+.pressable { transition: transform 120ms ease-out, background-color 150ms, color 150ms, box-shadow 150ms; }
+.pressable:active { transform: scale(0.97); transition-duration: 70ms; }
+
+/* translucent chrome: blur + saturation, bright top edge like light catching the material */
+.glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 1px 0 rgba(15, 23, 42, 0.06);
+}
+
 .btn-primary {
   background-image: linear-gradient(180deg, #4a68e6, #3b5bdb);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 6px 14px -6px rgba(59, 91, 219, 0.7);
@@ -63,6 +77,11 @@ input[type="range"] { accent-color: var(--color-brand); }
 
 @media (prefers-reduced-motion: reduce) {
   .flow, .page-in, .rise, .slide-in, .pulse-ring, .skeleton, .live-dot { animation: none; }
-  .card-hover:hover { transform: none; }
+  .card-hover:hover, .card-hover:active, .pressable:active { transform: none; }
+  .dock { transition: opacity 150ms linear !important; transform: none !important; translate: none !important; }
   html { scroll-behavior: auto; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
 }

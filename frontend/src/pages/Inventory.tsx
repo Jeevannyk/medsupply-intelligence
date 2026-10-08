@@ -33,7 +33,7 @@ export function InventoryGrid({ compact = false }: { compact?: boolean }) {
                 return (
                   <td key={x} className="px-0.5">
                     <button onClick={() => { setMed(x); setHosp(h.id); go("/demand"); }} title={`${c.message}\nProjected: ${fmt(c.stock)} · on hand ${fmt(c.physical)}${c.incoming ? ` · incoming ${fmt(c.incoming)}` : ""}${c.outgoing ? ` · committed out ${fmt(c.outgoing)}` : ""}`}
-                      className="num w-full rounded-lg px-1.5 py-1.5 text-center leading-tight transition-transform hover:scale-105"
+                      className="pressable num w-full rounded-lg px-1.5 py-1.5 text-center leading-tight hover:scale-105"
                       style={{ background: RISK[c.risk].soft, boxShadow: c.risk === "ok" ? "inset 0 0 0 1px #d1fae5" : `inset 0 0 0 1.5px ${RISK[c.risk].color}` }}>
                       <div className="font-semibold">{fmt(c.stock)}</div>
                       <div className="text-[10px] text-muted">{c.days_of_cover ?? "–"} d{c.incoming ? ` · +${fmt(c.incoming)}` : ""}{c.outgoing ? ` · −${fmt(c.outgoing)}` : ""}</div>
