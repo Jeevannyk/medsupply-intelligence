@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Check, HandCoins, Inbox as InboxIcon, Megaphone, MessageSquare, PackagePlus, Send, Truck, Undo2, X } from "lucide-react";
-import { get, post, useApi, type Board, type Offer, type StockRequest, type Transfer } from "../api";
-import { Button, Card, Empty, Input, Loading, Pill, Segmented, Stat, Stepper, fmt } from "../components/ui";
+import { get, post, useApi, type Board, type DeliveryMode, type DeliveryOptions, type Offer, type StockRequest, type Transfer } from "../api";
+import { ShipmentTracker } from "../components/ShipmentTracker";
+import { Button, Card, Empty, Input, LoadError, Loading, Pill, Segmented, Stat, Stepper, fmt, useCountdown } from "../components/ui";
 import { useApp, type Act, type Names } from "../context";
 
 const STEP: Record<string, number> = { pending: 0, approved: 1, in_transit: 2, delivered: 3 };
@@ -20,17 +21,18 @@ const isOffer = (p: Post): p is Offer => "batch_id" in p;
 
 export default function ExchangePage() {
   const { names, actor, setActor, version, act } = useApp();
-  const b = useApi(() => get<Board>("/exchange", { hospital: actor === "NET" ? undefined : actor }), [actor, version]);
+  const isHosp = actor !== "NET" && actor !== "DIST";
+  const b = useApi(() => get<Board>("/exchange", { hospital: isHosp ? actor : undefined }), [actor, version]);
   const [tab, setTab] = useState<"inbox" | "transfers" | "new">(() => {      // a notification can ask for a specific tab
     try { const t = sessionStorage.getItem("exchangeTab"); sessionStorage.removeItem("exchangeTab"); return t === "transfers" ? "transfers" : "inbox"; } catch { return "inbox"; }
   });
-  const isHosp = actor !== "NET";
   useEffect(() => {                                           // a notification clicked while this page is already open
     const on = (e: Event) => { setTab((e as CustomEvent<"inbox" | "transfers">).detail); try { sessionStorage.removeItem("exchangeTab"); } catch { /* ignore */ } };
     window.addEventListener("exchange-tab", on);
     return () => window.removeEventListener("exchange-tab", on);
   }, []);
 
+  if (b.error && !b.data) return <LoadError error={b.error} retry={b.reload} />;
   if (!b.data) return <Loading h="h-80" />;
   const { transfers, offers, requests } = b.data;
   const openReq = requests.filter((r) => r.status === "open");
@@ -42,7 +44,7 @@ export default function ExchangePage() {
     return (
       <div className="space-y-5">
         <p className="rounded-xl bg-indigo-50 px-4 py-3 text-sm leading-6 text-indigo-900">
-          <b>Network admin view is read-only.</b> Hospitals post, accept, approve, dispatch and receive. The admin proposes transfers from Redistribution and watches them here.
+          <b>{names.hn(actor)} view is read-only here.</b> Hospitals post, accept, approve, dispatch and receive. The admin proposes transfers from Redistribution and watches them here; delivery is followed on the Logistics page.
           Use <b>Act as</b> to continue as a hospital.
         </p>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -285,15 +287,16 @@ function TransferCard({ t, actor, names, version, act, onActAs }: {
   t: Transfer; actor: string; names: Names; version: number; act: Act; onActAs?: (h: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const isHosp = actor !== "NET";
+  const isHosp = actor !== "NET" && actor !== "DIST";
   const can = {
     dispatch: isHosp && t.status === "approved" && actor === t.from_id,
     receive: isHosp && t.status === "in_transit" && actor === t.to_id,
     cancel: isHosp && (t.status === "pending" || t.status === "approved") && (actor === t.from_id || actor === t.to_id),
   };
   const next = t.status === "approved" ? t.from_id : t.status === "in_transit" ? t.to_id : t.status === "pending" ? t.awaiting : null;
-  const go = (action: string, ok: string) => act(() => post(`/transfers/${t.id}/action`, { action, actor }), ok);
+  const go = (action: string, ok: string | ((r: Transfer) => string)) => act(() => post(`/transfers/${t.id}/action`, { action, actor }), ok);
   const mine = (can.dispatch || can.receive);
+  const s = t.shipment;
   return (
     <li className={`rounded-xl border p-3.5 ${mine ? "border-brand/50 bg-brand-soft/30" : "border-line"}`}>
       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -303,16 +306,101 @@ function TransferCard({ t, actor, names, version, act, onActAs }: {
         <Pill tone={TONE[t.status]}>{LABEL[t.status]}</Pill>
         <span className="text-[11px] text-muted">{ORIGIN[t.origin] ?? t.origin}</span>
         <div className="ml-auto flex flex-wrap gap-1.5">
-          {can.dispatch && <Button size="sm" variant="success" icon={<Truck size={14} />} onClick={() => go("dispatch", `Dispatched #${t.id}. ${names.hn(t.to_id)} confirms receipt.`)}>Dispatch</Button>}
-          {can.receive && <Button size="sm" variant="success" icon={<HandCoins size={14} />} onClick={() => go("receive", `Received #${t.id}. Your stock is updated.`)}>Confirm receipt</Button>}
+          {can.dispatch && <Button size="sm" variant="success" icon={<Truck size={14} />} disabled={s?.status === "requested"}
+            title={s?.status === "requested" ? "Waiting for the district office to assign a vehicle" : s ? "Hand the goods over now" : "No delivery arranged: goes with your own vehicle"}
+            onClick={() => go("dispatch", (r) => `Dispatched #${t.id}. Handover code ${r.shipment?.handover_code}: give it to the driver. ${names.hn(t.to_id)} needs it to confirm.`)}>Dispatch</Button>}
           {can.cancel && <Button size="sm" variant="danger" icon={<X size={14} />} onClick={() => go("cancel", `Cancelled #${t.id}.`)}>Cancel</Button>}
           {!isHosp && next && next !== "AI" && onActAs && <Button size="sm" variant="subtle" onClick={() => onActAs(next)}>Act as {next}</Button>}
           <Button size="sm" variant="ghost" icon={<MessageSquare size={14} />} onClick={() => setOpen(!open)}>Thread</Button>
         </div>
       </div>
       {t.status in STEP && <div className="mt-3"><Stepper steps={["Proposed", "Agreed", "In transit", "Delivered"]} current={STEP[t.status]} /></div>}
+      {can.dispatch && <DeliveryArranger t={t} actor={actor} act={act} />}
+      {s && s.status !== "cancelled" && (
+        <div className="mt-3"><ShipmentTracker s={s} showCode={actor === t.from_id && t.status === "in_transit"} /></div>
+      )}
+      {can.receive && <ReceiveForm t={t} actor={actor} names={names} act={act} />}
       {open && <Thread id={t.id} actor={actor} version={version} act={act} names={names} />}
     </li>
+  );
+}
+
+const MODE_LABEL: Record<DeliveryMode, string> = { in_house: "Own vehicle", courier: "Courier", district: "District pool" };
+
+/* the donor chooses how the goods travel; the planner suggests a mode */
+export function DeliveryArranger({ t, actor, act }: { t: Transfer; actor: string; act: Act }) {
+  const opts = useApi(() => get<DeliveryOptions>(`/transfers/${t.id}/delivery-options`), [t.id]);
+  const cur = t.shipment;
+  const [mode, setMode] = useState<DeliveryMode | null>(null);
+  const [vehicle, setVehicle] = useState(cur?.vehicle ?? "");
+  const [driver, setDriver] = useState(cur?.driver ?? "");
+  const chosen: DeliveryMode = mode ?? cur?.mode ?? opts.data?.mode ?? "in_house";
+  return (
+    <div className="mt-3 rounded-xl border border-line bg-white p-3 text-xs">
+      <p className="font-semibold text-ink">How will this travel?
+        {opts.data && <span className="font-normal text-muted"> Suggested: {MODE_LABEL[opts.data.mode]} ({opts.data.reasons.join("; ")}).</span>}
+      </p>
+      <div className="mt-2">
+        <Segmented value={chosen} onChange={setMode} size="sm"
+          options={(["in_house", "courier", "district"] as DeliveryMode[]).map((m) => ({ value: m, label: `${MODE_LABEL[m]}${opts.data?.mode === m ? " ★" : ""}` }))} />
+      </div>
+      {chosen === "in_house" && (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <Input className="h-9" placeholder="Vehicle, e.g. KA-19-AB-1234" value={vehicle} onChange={(e) => setVehicle(e.target.value)} />
+          <Input className="h-9" placeholder="Driver name" value={driver} onChange={(e) => setDriver(e.target.value)} />
+        </div>
+      )}
+      {chosen === "courier" && <p className="mt-2 text-muted">A courier is booked through its API and reports pickup, delays and arrival back to the network.{t.medicine_id === "INSU" ? " Insulin travels cold-chain." : ""}</p>}
+      {chosen === "district" && <p className="mt-2 text-muted">The request goes to the district logistics office, which assigns a pool vehicle. You can dispatch once one is assigned.</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="secondary" icon={<Truck size={14} />}
+          onClick={() => act(() => post(`/transfers/${t.id}/delivery`, { actor, mode: chosen, vehicle, driver }),
+            chosen === "district" ? "Vehicle requested from the district office." : `Delivery arranged: ${MODE_LABEL[chosen]}.`)}>
+          {cur ? "Update delivery" : "Arrange delivery"}
+        </Button>
+        {!cur && <span className="text-muted">Skip this and Dispatch uses your own vehicle.</span>}
+      </div>
+    </div>
+  );
+}
+
+/* the receiver confirms with the donor's code and says how much actually arrived */
+export function ReceiveForm({ t, actor, names, act }: { t: Transfer; actor: string; names: Names; act: Act }) {
+  const [code, setCode] = useState("");
+  const [qty, setQty] = useState(t.qty);
+  const [cond, setCond] = useState<"short" | "damaged">("short");
+  const missing = Math.max(0, t.qty - qty);
+  const s = t.shipment;
+  const left = useCountdown(s?.remaining_seconds ?? null, `${t.id}-${s?.status}-${s?.at_door}`);
+  const onRoad = !!s && s.status === "in_transit" && !s.at_door && left > 0;      // not here yet: the server refuses too
+  return (
+    <div className="mt-3 rounded-xl border border-brand/40 bg-white p-3 text-xs">
+      <p className="font-semibold text-ink">Confirm what arrived
+        {(s?.at_door || s?.status === "arrived" || (s && !onRoad)) && <span className="font-normal text-emerald-700"> · the vehicle is at your door</span>}
+        {onRoad && <span className="font-normal text-teal-700"> · the vehicle is on its way, arriving in {left} s</span>}
+      </p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_1fr]">
+        <label className="block font-semibold text-muted">Handover code
+          <Input className="mt-1 h-9 w-full tracking-[0.25em]" inputMode="numeric" maxLength={6} placeholder="6 digits" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
+        </label>
+        <label className="block font-semibold text-muted">Units accepted (of {fmt(t.qty)})
+          <Input type="number" min={0} max={t.qty} className="mt-1 h-9 w-full" value={qty} onChange={(e) => setQty(Math.min(t.qty, Math.max(0, Number(e.target.value))))} />
+        </label>
+        {missing > 0 && (
+          <label className="block font-semibold text-muted">Why {fmt(missing)} are missing
+            <select value={cond} onChange={(e) => setCond(e.target.value as "short" | "damaged")} className={`${FIELD} h-9`}>
+              <option value="short">Short: never arrived (returns to donor)</option>
+              <option value="damaged">Damaged or spoiled (written off)</option>
+            </select>
+          </label>
+        )}
+      </div>
+      <Button size="sm" variant="success" className="mt-2" icon={<HandCoins size={14} />} disabled={code.length !== 6 || onRoad}
+        onClick={() => act(() => post(`/transfers/${t.id}/action`, { action: "receive", actor, code, received_qty: qty, condition: missing > 0 ? cond : "ok" }),
+          missing > 0 ? `Received ${fmt(qty)} of ${fmt(t.qty)} on #${t.id}. The ${fmt(missing)} missing are recorded.` : `Received #${t.id}. ${names.hn(actor)} stock is updated.`)}>
+        {onRoad ? `Arrives in ${left} s` : "Confirm receipt"}
+      </Button>
+    </div>
   );
 }
 

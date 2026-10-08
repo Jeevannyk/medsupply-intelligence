@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Activity, Bot, Boxes, Building2, CheckCircle2, CircleAlert, Hourglass, LayoutDashboard, LineChart, Map as MapIcon,
-  Menu, Pill, RefreshCw, Scale, Share2, Siren, ArrowLeftRight, X, type LucideIcon,
+  Menu, Pill, RefreshCw, Scale, Share2, Siren, ArrowLeftRight, Truck, X, type LucideIcon,
 } from "lucide-react";
 import { get, post, useApi, weightParams, type Meta, type Overview, type Scenario, type Weights } from "./api";
 import CopilotDock from "./components/CopilotDock";
@@ -13,6 +13,7 @@ import Assistant from "./pages/Assistant";
 import Dashboard from "./pages/Dashboard";
 import Demand from "./pages/Demand";
 import Exchange from "./pages/Exchange";
+import Logistics from "./pages/Logistics";
 import Expiry from "./pages/Expiry";
 import Hospitals, { HospitalDetailPage } from "./pages/Hospitals";
 import Inventory from "./pages/Inventory";
@@ -39,6 +40,7 @@ const GROUPS: Group[] = [
     { path: "/redistribution", label: "Redistribution", title: "Redistribution engine", sub: "Optimiser-proposed transfers between hospitals", icon: Share2, page: () => <Redistribution />, badge: "moves" },
     { path: "/priority", label: "Prioritisation", title: "Prioritisation", sub: "Who gets scarce stock first, and why. Adjust the weights live", icon: Scale, page: () => <Priority /> },
     { path: "/exchange", label: "Hospital exchange", title: "Hospital exchange", sub: "Offers, requests, transfers and messages between hospitals", icon: ArrowLeftRight, page: () => <Exchange /> },
+    { path: "/logistics", label: "Logistics", title: "Logistics", sub: "Delivery from dispatch to receipt: own vehicle, courier or district pool, with live tracking and handover codes", icon: Truck, page: () => <Logistics /> },
     { path: "/map", label: "Network map", title: "Network map", sub: "Transfers and risk on real hospital locations", icon: MapIcon, page: () => <MapPage /> },
   ] },
   { name: "Analyse", items: [
@@ -89,7 +91,7 @@ export default function App() {
   const H = Object.fromEntries(m.hospitals.map((h) => [h.id, h]));
   const M = Object.fromEntries(m.medicines.map((x) => [x.id, x]));
   const names: Names = {
-    hn: (id) => (id === "AI" ? "Network AI" : id === "NET" ? "Network admin" : id === "ALL" ? "All hospitals" : H[id]?.name ?? id),
+    hn: (id) => (id === "AI" ? "Network AI" : id === "NET" ? "Network admin" : id === "DIST" ? "District logistics office" : id === "CARRIER" ? "Courier" : id === "SYSTEM" ? "System" : id === "ALL" ? "All hospitals" : H[id]?.name ?? id),
     mn: (id) => M[id]?.name ?? id,
     unit: (id) => M[id]?.unit ?? "units",
   };
@@ -182,6 +184,7 @@ export default function App() {
                 options={[{ value: "outbreak", label: "After outbreak" }, { value: "normal", label: "Before outbreak" }]} />
               <Select label="Acting as" value={actor} onChange={setActor} className="w-48">
                 <option value="NET">Network admin</option>
+                <option value="DIST">District logistics office</option>
                 {m.hospitals.map((h) => <option key={h.id} value={h.id}>{h.id} · {h.name}</option>)}
               </Select>
               <NotificationBell />

@@ -92,6 +92,26 @@ export interface Transfer {
   status: "pending" | "approved" | "in_transit" | "delivered" | "declined" | "cancelled";
   awaiting: string | null; origin: string; reason: string; hours: number; created_at: string; updated_at: string;
   messages?: Message[];
+  shipment?: Shipment | null;
+}
+export type DeliveryMode = "in_house" | "courier" | "district";
+export interface ShipmentEvent { id: number; ts: string; type: string; source: string; note: string }
+export interface Shipment {
+  id: number; transfer_id: number; mode: DeliveryMode; mode_label: string;
+  status: "planned" | "requested" | "assigned" | "in_transit" | "arrived" | "delivered" | "cancelled";
+  carrier: string | null; tracking_id: string | null; vehicle: string | null; driver: string | null; cold_chain: number;
+  handover_code: string | null; dispatched_at: string | null; eta_at: string | null; delivered_at: string | null; progress: number;
+  remaining_hours: number | null; remaining_seconds: number | null; at_door: boolean; planned_hours: number | null;
+  delayed: number; received_qty: number | null; condition: string | null;
+  events: ShipmentEvent[];
+}
+export interface DeliveryOptions {
+  hours: number; mode: DeliveryMode; reasons: string[]; alternatives: { mode: DeliveryMode; label: string }[]; note: string;
+}
+export type ShipmentRow = Shipment & { from_id: string; to_id: string; medicine_id: string; qty: number; transfer_status: string };
+export interface LogisticsBoard {
+  shipments: ShipmentRow[]; district_queue: ShipmentRow[]; sim_now: string;
+  discrepancies: { id: number; transfer_id: number; medicine_id: string; expected: number; received: number; missing: number; condition: string; resolution: string; created_at: string }[];
 }
 export interface Offer {
   id: number; hospital_id: string; medicine_id: string; batch_id: string | null; qty: number; remaining: number;
@@ -134,18 +154,24 @@ export function weightParams(w: Weights): Params {
   return Object.fromEntries(Object.entries(w).map(([k, v]) => [`w_${k}`, v]));
 }
 
-export async function get<T>(path: string, params?: Params): Promise<T> {
-  const r = await fetch(`/api${path}${qs(params)}`);
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText);
+/** The backend answers an unknown /api path with the app's HTML page: that means it is running old code. */
+async function json<T>(r: Response, path: string): Promise<T> {
+  if (!(r.headers.get("content-type") ?? "").includes("json")) {
+    throw new Error(`The server did not return data for /api${path}. It is probably running old code: restart the backend (uvicorn) and reload.`);
+  }
+  if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { detail?: string }).detail ?? r.statusText);
   return r.json();
+}
+
+export async function get<T>(path: string, params?: Params): Promise<T> {
+  return json<T>(await fetch(`/api${path}${qs(params)}`), path);
 }
 
 export async function post<T>(path: string, body: unknown = {}): Promise<T> {
   const r = await fetch(`/api${path}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText);
-  return r.json();
+  return json<T>(r, path);
 }
 
 export function useApi<T>(fn: () => Promise<T>, deps: unknown[]) {

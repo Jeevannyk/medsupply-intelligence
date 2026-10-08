@@ -5,6 +5,15 @@ export const fmt = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? "–" : n.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
 export const inr = (n: number) => `₹${fmt(n)}`;
 
+/** 23 s, 4 min, 2.5 h: the time left on a trip at the scale that matters. */
+export function fmtLeft(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "–";
+  if (seconds <= 0) return "arrived";
+  if (seconds < 120) return `${Math.ceil(seconds)} s left`;
+  if (seconds < 7200) return `${Math.round(seconds / 60)} min left`;
+  return `${(seconds / 3600).toFixed(1)} h left`;
+}
+
 export const RISK: Record<Risk, { label: string; badge: string; color: string; soft: string }> = {
   stockout: { label: "Out of stock", badge: "bg-risk-stockout text-white", color: "#7f1d1d", soft: "#fde8e8" },
   critical: { label: "Critical", badge: "bg-risk-critical text-white", color: "#dc2626", soft: "#fee2e2" },
@@ -118,6 +127,17 @@ export function Loading({ h = "h-40" }: { h?: string }) {
   return <div className={`skeleton rounded-xl ${h}`} />;
 }
 
+/** Shown instead of a skeleton that would never go away. */
+export function LoadError({ error, retry }: { error: string; retry?: () => void }) {
+  return (
+    <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-900">
+      <p className="font-semibold">This page could not load its data.</p>
+      <p className="mt-1 leading-6">{error}</p>
+      {retry && <Button className="mt-3" size="sm" variant="secondary" onClick={retry}>Try again</Button>}
+    </div>
+  );
+}
+
 export function Pill({ children, tone = "slate" }: { children: ReactNode; tone?: "slate" | "brand" | "green" | "red" | "amber" | "teal" }) {
   const t = {
     slate: "bg-slate-100 text-slate-700", brand: "bg-brand-soft text-brand-ink", green: "bg-emerald-50 text-emerald-700",
@@ -178,4 +198,18 @@ export function Stepper({ steps, current }: { steps: string[]; current: number }
       ))}
     </ol>
   );
+}
+
+/** Whole seconds still to wait, counting down locally from the figure the server gave when the data was fetched. */
+export function useCountdown(seconds: number | null | undefined, key: string): number {
+  const [now, setNow] = useState(() => Date.now());
+  const start = useRef(Date.now());
+  useEffect(() => { start.current = Date.now(); setNow(Date.now()); }, [seconds, key]);
+  useEffect(() => {
+    if (seconds === null || seconds === undefined) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [seconds, key]);
+  if (seconds === null || seconds === undefined) return 0;
+  return Math.max(0, Math.ceil(seconds - (now - start.current) / 1000));
 }

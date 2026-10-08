@@ -19,8 +19,17 @@ def stock(client, hospital, medicine):
     return next(c for c in cells if c["hospital"] == hospital and c["medicine"] == medicine)
 
 
+def handover_code(client, tid):
+    t = next(x for x in client.get("/api/exchange").json()["transfers"] if x["id"] == tid)
+    board = client.get("/api/exchange", params={"hospital": t["from_id"]}).json()       # only the donor's view shows the code
+    return next(x for x in board["transfers"] if x["id"] == tid)["shipment"]["handover_code"]
+
+
 def act(client, tid, action, actor):
-    return client.post(f"/api/transfers/{tid}/action", json={"action": action, "actor": actor})
+    body = {"action": action, "actor": actor}
+    if action == "receive" and actor != "NET":
+        body["code"] = handover_code(client, tid)
+    return client.post(f"/api/transfers/{tid}/action", json=body)
 
 
 def test_send_only_the_selected_move_and_its_arrow_disappears(client):

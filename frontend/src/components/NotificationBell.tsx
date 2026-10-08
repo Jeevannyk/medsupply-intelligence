@@ -24,7 +24,7 @@ function build(actor: string, b: Board, hn: (id: string) => string, mn: (id: str
   const openOff = b.offers.filter((o) => o.status === "open");
   const out: Note[] = [];
 
-  if (actor === "NET") {                                       // admin: read-only overview of what hospitals have posted
+  if (actor === "NET" || actor === "DIST") {                   // admin / district office: read-only overview of what hospitals have posted
     for (const r of openReq) out.push({ key: `r${r.id}`, kind: "request", mine: false, title: `${hn(r.hospital_id)} requested ${q(r.remaining, r.medicine_id)}`, sub: `Needed within ${r.needed_within_days} days${r.target ? ` · addressed to ${hn(r.target)}` : " · open to all hospitals"}`, time: t(r.created_at), tab: "inbox" });
     for (const o of openOff) out.push({ key: `o${o.id}`, kind: "offer", mine: false, title: `${hn(o.hospital_id)} is offering ${q(o.remaining, o.medicine_id)}`, sub: `Expires ${o.expiry_date}${o.target ? ` · addressed to ${hn(o.target)}` : " · open to all hospitals"}`, time: t(o.created_at), tab: "inbox" });
     return out;
@@ -56,7 +56,7 @@ export default function NotificationBell() {
   const prev = useRef<number | null>(null);
 
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 6000); return () => clearInterval(t); }, []);   // pick up posts made elsewhere
-  const board = useApi(() => get<Board>("/exchange", { hospital: actor === "NET" ? undefined : actor }), [actor, version, tick]);
+  const board = useApi(() => get<Board>("/exchange", { hospital: actor === "NET" || actor === "DIST" ? undefined : actor }), [actor, version, tick]);
   const notes = board.data ? build(actor, board.data, names.hn, names.mn, names.unit) : [];
   const count = notes.length;
 
@@ -82,7 +82,8 @@ export default function NotificationBell() {
     go("/exchange");
     window.dispatchEvent(new CustomEvent("exchange-tab", { detail: tab }));
   };
-  const who = actor === "NET" ? "Network admin (read-only)" : names.hn(actor);
+  const readOnly = actor === "NET" || actor === "DIST";
+  const who = readOnly ? `${names.hn(actor)} (read-only here)` : names.hn(actor);
   const urgent = notes.filter((n) => n.mine).length;
 
   return (

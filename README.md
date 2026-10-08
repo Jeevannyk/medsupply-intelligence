@@ -45,6 +45,19 @@ npm run dev
 
 Open **http://localhost:5173**. Vite proxies `/api` to port 8000.
 
+### Optional: mock courier service (delivery by a third-party carrier)
+
+Delivery can go by the donor's own vehicle, a courier, or a district pool. Own vehicle and district pool need nothing extra. For **courier** delivery, start the simulated carrier in a second terminal:
+
+```powershell
+cd backend
+.venv\Scripts\python -m uvicorn carrier_mock.app:app --port 8001
+```
+
+It has its own database (`backend/carrier.db`), runs a trip in real time (`CARRIER_TRAVEL_SECONDS`, default 30) and reports pickup, delays and arrival back to the app by webhook (`CARRIER_URL`, `CARRIER_KEY` in `.env`; the defaults work locally). If it is not running, choosing "Courier" shows a clear error and the donor picks another mode.
+
+Flow: approve transfer → donor arranges delivery → dispatch (donor sees a 6-digit handover code) → the truck drives its route on the **Logistics** map for 30 seconds (`LOGISTICS_TRAVEL_SECONDS`, the demo's compressed trip time; the real road time stays on the transfer) → only once it has arrived can the receiver confirm with the code and the units actually accepted. The server refuses an earlier receipt even with the right code. Short or damaged units are recorded as discrepancies; stock changes only on confirmation. Choose **Acting as: District logistics office** to assign pool vehicles. The Logistics page has a demo clock and "Delay" buttons so a late trip, and the plan reacting to it, can be shown in seconds.
+
 ### Reset to a clean demo state
 
 Click **Reset demo** in the header (or `POST /api/reset`). It regenerates the database and clears all transfers, offers, requests and messages. Do this before each demo run.
@@ -161,3 +174,6 @@ Start from **Reset demo**.
 - Some need remains uncovered by transfers (shown in the "Still short" box); the plan also lists supplier orders to place today.
 
 Numbers change if you edit the generator or seed.
+
+
+The truck routes on the Logistics map come from `backend/app/data/road_paths.json`: real OSRM driving geometry between every hospital pair (re-fetch with `python -m app.fetch_road_paths`, needs internet).

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { LocateFixed, Minus, Plus } from "lucide-react";
 import type { Cell, Hospital, Meta, Move, Overview } from "../api";
 import { RISK, RISK_RANK, fmt } from "./ui";
@@ -101,8 +101,13 @@ function placeLabels(hs: Hospital[], P: Record<string, { x: number; y: number }>
   return out;
 }
 
-export function NetworkMap({ meta, ov, moves, filterMed, onHospital, focusKey = null }: {
+export type MapCtx = { P: Record<string, { id: string; x: number; y: number }>; R: number; W: number; H: number; project: (lat: number, lon: number) => { x: number; y: number } };
+
+/** `overlay` draws extra SVG on top of the hospitals (Logistics uses it for deliveries); `legend={false}` hides the transfer legend. */
+export function NetworkMap({ meta, ov, moves, filterMed, onHospital, focusKey = null, overlay, legend = true, focusIds = null, wheelZoom = true }: {
   meta: Meta; ov: Overview; moves: Move[]; filterMed: string; onHospital: (h: string) => void; focusKey?: string | null;
+  overlay?: (ctx: MapCtx) => ReactNode; legend?: boolean; focusIds?: string[] | null;
+  wheelZoom?: boolean;          // false: the mouse wheel scrolls the page (hold Ctrl to zoom), so a big map never traps scrolling
 }) {
   const uid = useId().replace(/:/g, "");
   const [hover, setHover] = useState<string | null>(null);
@@ -117,6 +122,8 @@ export function NetworkMap({ meta, ov, moves, filterMed, onHospital, focusKey = 
   viewRef.current = v;
   fitRef.current = fit;
   const drag = useRef<{ x: number; y: number; cx: number; cy: number; moved: boolean } | null>(null);
+  const wheelRef = useRef(wheelZoom);
+  wheelRef.current = wheelZoom;
 
   const animateTo = (t: View, ms = 260) => {
     cancelAnimationFrame(raf.current);
@@ -129,6 +136,19 @@ export function NetworkMap({ meta, ov, moves, filterMed, onHospital, focusKey = 
     };
     raf.current = requestAnimationFrame(step);
   };
+  // zoom to the hospitals of a chosen delivery (so close-together sites are readable), and back out when it is cleared
+  const focusStr = focusIds && focusIds.length >= 2 ? focusIds.join(",") : "";
+  const lastFocus = useRef("");
+  useEffect(() => {
+    if (focusStr === lastFocus.current) return;
+    const had = lastFocus.current !== "";
+    lastFocus.current = focusStr;
+    if (focusStr) {
+      const t = fitView(meta.hospitals.filter((h) => focusIds!.includes(h.id)), W, Hh, 120, 170);
+      animateTo({ ...t, z: Math.min(t.z, ZMAX - 3) });
+    } else if (had) animateTo(fitRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusStr]);
   const toSvg = (cx: number, cy: number) => {
     const r = svgRef.current!.getBoundingClientRect();
     return { x: ((cx - r.left) * W) / r.width, y: ((cy - r.top) * Hh) / r.height, k: W / r.width };
@@ -138,6 +158,7 @@ export function NetworkMap({ meta, ov, moves, filterMed, onHospital, focusKey = 
   useEffect(() => {
     const el = svgRef.current!;
     const onWheel = (e: WheelEvent) => {
+      if (!wheelRef.current && !e.ctrlKey) return;
       e.preventDefault();
       cancelAnimationFrame(raf.current);
       const r = el.getBoundingClientRect();
@@ -279,7 +300,9 @@ export function NetworkMap({ meta, ov, moves, filterMed, onHospital, focusKey = 
           );
         })}
 
-        <g transform={`translate(16,${Hh - 22})`} fontSize="10.5" fill="#475569" fontWeight={600} pointerEvents="none">
+        {overlay?.({ P, R, W, H: Hh, project: (lat, lon) => ({ x: (ux(lon) - v.cx) * S + W / 2, y: (uy(lat) - v.cy) * S + Hh / 2 }) })}
+
+        {legend && <g transform={`translate(16,${Hh - 22})`} fontSize="10.5" fill="#475569" fontWeight={600} pointerEvents="none">
           <rect x={-6} y={-14} width={390} height={24} rx={12} fill="#fff" fillOpacity={0.9} stroke="#e2e8f0" />
           <line x1={6} y1={-2} x2={30} y2={-2} stroke={C.brand} strokeWidth={3} strokeLinecap="round" />
           <text x={38} y={2}>Shortage transfer</text>
@@ -287,7 +310,7 @@ export function NetworkMap({ meta, ov, moves, filterMed, onHospital, focusKey = 
           <text x={172} y={2}>Expiry rescue</text>
           <line x1={262} y1={-2} x2={286} y2={-2} stroke={C.orange} strokeWidth={3} strokeLinecap="round" />
           <text x={294} y={2}>Emergency loan</text>
-        </g>
+        </g>}
         <g transform={`translate(${W - 10},14)`} pointerEvents="none" fontSize="9.5" fill="#475569">
           <rect x={-160} y={-11} width={160} height={22} rx={11} fill="#fff" fillOpacity={0.92} stroke="#e2e8f0" />
           <text textAnchor="end" x={-10} y={3.5} fontWeight={500}>© OpenStreetMap contributors</text>

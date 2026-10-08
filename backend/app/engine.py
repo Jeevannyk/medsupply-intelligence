@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from . import forecast as fc_mod
-from . import optimizer, priority
+from . import logistics, optimizer, priority
 from .config import DEFAULT_WEIGHTS, HISTORY_DAYS, HORIZON, SAFETY_DAYS, TODAY
 from .db import rows, session
 from .inventory import RISK_ORDER, Batch, fefo, risk_level, round_up, warning_text
@@ -88,6 +88,10 @@ class Engine:
             ts = rows(c, f"SELECT * FROM transfers WHERE status IN {ACTIVE}")
         for t in ts:
             t["allocations"] = json.loads(t["allocations"] or "[]")
+        with session() as c:
+            ships = {s["transfer_id"]: s for s in rows(c, "SELECT * FROM shipments")}
+        for t in ts:
+            t["shipment"] = ships.get(t["id"])
         return ts
 
     def pipeline_batches(self):
@@ -104,9 +108,11 @@ class Engine:
                     continue
                 q = min(int(a["qty"]), src.qty)
                 src.qty -= q
+                # a shipment on the road lands when it really will (a late one lands later); otherwise the planned trip time
+                ship_day = logistics.engine_arrival_day(t["shipment"]) if t.get("shipment") else None
+                arrive = ship_day if ship_day is not None else optimizer.arrival_day(t["hours"] or 0)
                 cur.setdefault((t["to_id"], m), []).append(
-                    Batch(f"{a['batch_id']}>{t['to_id']}", q, src.exp,
-                          optimizer.arrival_day(t["hours"] or 0), virtual=True))
+                    Batch(f"{a['batch_id']}>{t['to_id']}", q, src.exp, arrive, virtual=True))
                 incoming[(t["to_id"], m)] = incoming.get((t["to_id"], m), 0) + q
                 outgoing[(t["from_id"], m)] = outgoing.get((t["from_id"], m), 0) + q
         cur = {k: [b for b in v if b.qty > 0] for k, v in cur.items()}
@@ -115,7 +121,9 @@ class Engine:
     # -------------------------------------------------------------- analysis
     def analysis(self, scenario: str = "outbreak", weights: dict | None = None) -> dict:
         weights = {**DEFAULT_WEIGHTS, **(weights or {})}
-        key = (scenario, tuple(sorted(weights.items())), self.version)
+        if logistics.refresh():          # a trip ran past its ETA since the last look
+            self.invalidate()
+        key = (scenario, tuple(sorted(weights.items())), self.version, logistics.time_bucket())
         with self.lock:
             if key in self.cache:
                 return self.cache[key]
@@ -560,6 +568,26 @@ class Engine:
                 "detected_date": (TODAY + timedelta(days=min(det) - T)).isoformat() if det else None,
                 "outbreak_start": self.meta.get("outbreak_start"),
                 "next_7d": int(round(fc.p50[idx, :7].sum())), "next_14d": int(round(fc.p50[idx].sum()))}
+
+    def medicine_detail(self, scenario, medicine) -> dict:
+        """One medicine across the network: every batch in expiry order, per-hospital stock, projected waste."""
+        a = self.analysis(scenario)
+        batches = [{"batch_id": b.id, "hospital": h, "qty": b.qty, "days_left": b.exp,
+                    "expiry_date": (TODAY + timedelta(days=b.exp)).isoformat()}
+                   for (h, m), bl in self.physical_batches().items() if m == medicine for b in bl]
+        batches.sort(key=lambda b: (b["days_left"], b["batch_id"]))
+        cells = {c["hospital"]: c for c in a["cells"] if c["medicine"] == medicine}
+        waste = [e for e in a["expiry"] if e["medicine"] == medicine]
+        timeline, lo = [], -1
+        for hi, label in ((30, "within 30 days"), (90, "31–90 days"), (180, "91–180 days"), (365, "181–365 days"), (10 ** 9, "over a year")):
+            inside = [b for b in batches if lo < b["days_left"] <= hi]
+            timeline.append({"label": label, "batches": len(inside), "units": sum(b["qty"] for b in inside)})
+            lo = hi
+        return {"medicine": self.M[medicine], "batches": batches, "timeline": timeline,
+                "hospitals": [{"hospital": h, "units": cells[h]["physical"], "days_to_stockout": cells[h]["days_to_stockout"],
+                               "risk": cells[h]["risk"]} for h in self.H],
+                "totals": {"units": sum(b["qty"] for b in batches), "projected_waste": sum(e["projected_waste"] for e in waste),
+                           "waste_value": sum(e["value"] for e in waste)}}
 
     def hospital_detail(self, scenario, hospital, weights=None) -> dict:
         a = self.analysis(scenario, weights)

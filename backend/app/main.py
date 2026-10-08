@@ -7,16 +7,22 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import generate
+import json
+import os
+
+from . import generate, logistics
 from .assistant import Assistant
 from .config import DB_PATH, DEFAULT_WEIGHTS, SCENARIOS, TODAY
 from .db import ensure_schema
 from .engine import Engine
 from .exchange import Exchange, ExchangeError
+from .logistics import LogisticsError
+from .seed_history import seed_history_once
 
 if not DB_PATH.exists():
     generate.generate()
 ensure_schema()
+seed_history_once()          # a few past deliveries so the Logistics log is not empty on a fresh start
 
 engine = Engine()
 exchange = Exchange(engine)
@@ -28,6 +34,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.exception_handler(ExchangeError)
 def exchange_error(_: Request, exc: ExchangeError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(LogisticsError)
+def logistics_error(_: Request, exc: LogisticsError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
@@ -84,6 +95,20 @@ def hospital(hospital: str, request: Request, scenario: str = "outbreak"):
     return clean(d)
 
 
+@app.get("/api/road-paths")
+def road_paths():
+    """Real driving routes between hospital pairs ("A-B" with A before B, as [lat, lon] points) for the delivery map."""
+    f = Path(__file__).resolve().parent / "data" / "road_paths.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else {"source": "none", "paths": {}}
+
+
+@app.get("/api/medicines/{medicine}")
+def medicine_detail(medicine: str, scenario: str = "outbreak"):
+    if medicine not in engine.M:
+        raise HTTPException(404, "unknown medicine")
+    return clean(engine.medicine_detail(check_scenario(scenario), medicine))
+
+
 @app.get("/api/judge")
 def judge(scenario: str = "outbreak"):
     return clean(engine.judge(check_scenario(scenario)))
@@ -106,6 +131,39 @@ class Action(BaseModel):
     action: str
     actor: str
     note: str = ""
+    code: str | None = None             # receive: the donor's handover code
+    received_qty: int | None = None     # receive: units accepted into stock (default: all)
+    condition: str = "ok"               # receive: ok | short | damaged
+
+
+class Delivery(BaseModel):
+    actor: str
+    mode: str                           # in_house | courier | district
+    vehicle: str = ""
+    driver: str = ""
+
+
+class Assign(BaseModel):
+    actor: str
+    vehicle: str
+    driver: str
+
+
+class CarrierEvent(BaseModel):
+    event_id: str
+    tracking_id: str
+    type: str
+    note: str = ""
+    delay_hours: float = 0
+
+
+class Advance(BaseModel):
+    hours: float
+
+
+class Delay(BaseModel):
+    hours: float
+    reason: str = ""
 
 
 class Offer(BaseModel):
@@ -172,7 +230,47 @@ def send_plan(body: SendPlan):
 
 @app.post("/api/transfers/{tid}/action")
 def act(tid: int, body: Action):
-    return exchange.act(tid, body.action, body.actor, body.note)
+    return exchange.act(tid, body.action, body.actor, body.note, body.code, body.received_qty, body.condition)
+
+
+# ---------------------------------------------------------------- logistics
+@app.get("/api/transfers/{tid}/delivery-options")
+def delivery_options(tid: int):
+    return exchange.recommend_delivery(tid)
+
+
+@app.post("/api/transfers/{tid}/delivery")
+def arrange_delivery(tid: int, body: Delivery):
+    return exchange.arrange_delivery(tid, body.actor, body.mode, body.vehicle, body.driver)
+
+
+@app.get("/api/logistics")
+def logistics_board(viewer: str | None = Query(None)):
+    return exchange.logistics_board(viewer)
+
+
+@app.post("/api/logistics/shipments/{sid}/assign")
+def assign_vehicle(sid: int, body: Assign):
+    return exchange.assign_vehicle(sid, body.actor, body.vehicle, body.driver)
+
+
+@app.post("/api/logistics/shipments/{sid}/delay")
+def simulate_delay(sid: int, body: Delay):
+    return exchange.simulate_delay(sid, body.hours, body.reason)
+
+
+@app.post("/api/logistics/sim/advance")
+def advance_clock(body: Advance):
+    now = logistics.advance(body.hours)
+    engine.invalidate()
+    return {"sim_offset_hours": now}
+
+
+@app.post("/api/logistics/webhook")
+def carrier_webhook(body: CarrierEvent, request: Request):
+    if request.headers.get("X-Carrier-Key") != os.environ.get("CARRIER_KEY", "carrier-demo-key"):
+        raise HTTPException(401, "bad carrier key")
+    return exchange.webhook(body.model_dump())
 
 
 @app.post("/api/offers")
@@ -238,6 +336,7 @@ def analyze_forecast(body: ForecastAnalysis):
 @app.post("/api/reset")
 def reset():
     generate.generate()
+    seed_history_once()
     engine.load_static()
     return {"ok": True}
 

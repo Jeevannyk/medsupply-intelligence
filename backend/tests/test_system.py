@@ -64,9 +64,12 @@ def test_transfer_lifecycle_moves_stock_and_conserves_units(client):
     assert first["status"] == "pending" and first["awaiting"] == first["from_id"]
     # wrong party cannot approve
     assert client.post(f"/api/transfers/{first['id']}/action", json={"action": "approve", "actor": first["to_id"]}).status_code == 400
+    code = None
     for action, actor in (("approve", first["from_id"]), ("dispatch", first["from_id"]), ("receive", first["to_id"])):
-        r = client.post(f"/api/transfers/{first['id']}/action", json={"action": action, "actor": actor})
+        r = client.post(f"/api/transfers/{first['id']}/action", json={"action": action, "actor": actor, "code": code})
         assert r.status_code == 200, r.text
+        if action == "dispatch":
+            code = r.json()["shipment"]["handover_code"]        # the donor is shown the code at dispatch
     done = r.json()
     assert done["status"] == "delivered" and len(done["messages"]) >= 4
     a = client.get("/api/overview").json()

@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 # generated data (recreated by python -m app.generate)
 backend/medsupply.db*
+backend/carrier.db*
 # Node
 frontend/node_modules/
 frontend/dist/

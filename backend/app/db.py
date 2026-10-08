@@ -64,6 +64,20 @@ CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT, sender TEXT, recipient TEXT, kind TEXT, body TEXT,
     transfer_id INTEGER, offer_id INTEGER, request_id INTEGER);
+CREATE TABLE IF NOT EXISTS shipments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transfer_id INTEGER UNIQUE, mode TEXT, status TEXT, carrier TEXT, tracking_id TEXT,
+    vehicle TEXT, driver TEXT, cold_chain INTEGER DEFAULT 0, handover_code TEXT, planned_hours REAL,
+    dispatched_at TEXT, eta_at TEXT, arrived_at TEXT, delivered_at TEXT, progress REAL DEFAULT 0,
+    delayed INTEGER DEFAULT 0, received_qty INTEGER, condition TEXT, receipt_note TEXT,
+    created_at TEXT, updated_at TEXT, moved_at TEXT);
+CREATE TABLE IF NOT EXISTS shipment_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shipment_id INTEGER, ts TEXT, type TEXT, source TEXT, note TEXT, external_id TEXT UNIQUE);
+CREATE TABLE IF NOT EXISTS discrepancies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transfer_id INTEGER, shipment_id INTEGER, medicine_id TEXT, expected INTEGER, received INTEGER,
+    missing INTEGER, condition TEXT, resolution TEXT, note TEXT, created_at TEXT);
 """
 
 
@@ -76,6 +90,9 @@ def ensure_schema() -> None:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
             if "target" not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN target TEXT")
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(shipments)")}
+        if "moved_at" not in cols:
+            conn.execute("ALTER TABLE shipments ADD COLUMN moved_at TEXT")
         conn.commit()
     finally:
         conn.close()

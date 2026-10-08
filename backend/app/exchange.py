@@ -13,9 +13,11 @@
 import json
 from datetime import datetime, timedelta
 
+from . import logistics
 from .config import TODAY
 from .db import rows, session
 from .engine import ACTIVE, Engine, days_until
+from .logistics import LogisticsError
 from .optimizer import arrival_day
 
 
@@ -114,7 +116,8 @@ class Exchange:
         return ids
 
     # -------------------------------------------------------- transitions
-    def act(self, tid: int, action: str, actor: str, note: str = "") -> dict:
+    def act(self, tid: int, action: str, actor: str, note: str = "", code: str | None = None,
+            received_qty: int | None = None, condition: str = "ok") -> dict:
         with session() as c:
             t = next(iter(rows(c, "SELECT * FROM transfers WHERE id=?", (tid,))), None)
             if not t:
@@ -136,18 +139,26 @@ class Exchange:
             elif action == "dispatch":
                 if st != "approved" or actor != frm:
                     raise ExchangeError("Only the donor can dispatch an approved transfer")
-                eta = datetime.now() + timedelta(hours=t["hours"] or 0)
+                s = logistics.dispatch(c, t, self.name(frm), self.name(to))
                 new, awaiting = "in_transit", to
-                body = f"{self.name(frm)} dispatched transfer #{tid} ({label}). ETA {eta:%H:%M}."
+                body = (f"{self.name(frm)} dispatched transfer #{tid} ({label}) with {logistics.describe(s)}. "
+                        f"ETA {logistics.parse(s['eta_at']):%H:%M}. Confirm receipt with the donor's handover code.")
             elif action == "receive":
                 if st != "in_transit" or actor != to:
                     raise ExchangeError("Only the recipient can confirm receipt of an in-transit transfer")
-                self._deliver(c, t)
+                s = logistics.shipment_for(c, tid)
+                accepted, missing, cond, resolution = logistics.check_receipt(s, t, code, received_qty, condition)
+                self._deliver(c, t, accepted, resolution)
+                logistics.close(c, t, s, accepted, missing, cond, resolution, note, actor)
                 new, awaiting = "delivered", None
                 body = f"{self.name(to)} received transfer #{tid} ({label}). Stock records updated."
+                if missing:
+                    body = (f"{self.name(to)} received {accepted:,} of {label} on transfer #{tid}; {missing:,} {cond}, "
+                            f"{resolution.replace('_', ' ')}. Stock records updated for the {accepted:,} accepted.")
             elif action == "cancel":
                 if st not in ("pending", "approved") or actor not in (frm, to):
                     raise ExchangeError("Only pending or approved transfers can be cancelled")
+                logistics.cancel(c, t)
                 new, awaiting, body = "cancelled", None, f"{self.name(actor)} cancelled transfer #{tid} ({label})."
             else:
                 raise ExchangeError(f"Unknown action {action}")
@@ -157,18 +168,25 @@ class Exchange:
             for party in sorted({frm, to} - {actor}):
                 post_message(c, actor, party, body, "system", transfer_id=tid)
         self.e.invalidate()
-        return self.transfer(tid)
+        return self.transfer(tid, actor)
 
-    def _deliver(self, c, t):
+    def _deliver(self, c, t, accepted: int | None = None, resolution: str | None = None):
+        """Move the accepted units into the recipient's stock. Units that never arrived intact either go back to
+        the donor's batch (short) or are written off (damaged); either way only `accepted` reaches the recipient."""
+        left = int(t["qty"]) if accepted is None else int(accepted)
         for a in json.loads(t["allocations"]):
             src = next(iter(rows(c, "SELECT * FROM batches WHERE batch_id=?", (a["batch_id"],))), None)
             if not src or src["qty"] < a["qty"]:
                 raise ExchangeError(f"Batch {a['batch_id']} no longer has {a['qty']} units at the donor")
-            c.execute("UPDATE batches SET qty=qty-? WHERE batch_id=?", (a["qty"], a["batch_id"]))
-            c.execute("INSERT INTO batches (batch_id, hospital_id, medicine_id, qty, expiry_date, received_date, source) "
-                      "VALUES (?,?,?,?,?,?,?)",
-                      (f"{a['batch_id']}>{t['to_id']}#{t['id']}", t["to_id"], t["medicine_id"], a["qty"],
-                       src["expiry_date"], TODAY.isoformat(), f"transfer #{t['id']} from {t['from_id']}"))
+            take = min(int(a["qty"]), left)
+            left -= take
+            leave = take if resolution == "returned_to_donor" else int(a["qty"])
+            c.execute("UPDATE batches SET qty=qty-? WHERE batch_id=?", (leave, a["batch_id"]))
+            if take > 0:
+                c.execute("INSERT INTO batches (batch_id, hospital_id, medicine_id, qty, expiry_date, received_date, source) "
+                          "VALUES (?,?,?,?,?,?,?)",
+                          (f"{a['batch_id']}>{t['to_id']}#{t['id']}", t["to_id"], t["medicine_id"], take,
+                           src["expiry_date"], TODAY.isoformat(), f"transfer #{t['id']} from {t['from_id']}"))
 
     # ------------------------------------------------------ offers/requests
     def _check_party(self, hospital, target=None):
@@ -354,14 +372,100 @@ class Exchange:
         return {"ok": True}
 
     # -------------------------------------------------------------- views
-    def transfer(self, tid):
+    def transfer(self, tid, viewer: str | None = None):
         with session() as c:
             t = rows(c, "SELECT * FROM transfers WHERE id=?", (tid,))[0]
             t["allocations"] = json.loads(t["allocations"] or "[]")
             t["messages"] = rows(c, "SELECT * FROM messages WHERE transfer_id=? ORDER BY id", (tid,))
+            t["shipment"] = logistics.public(c, logistics.shipment_for(c, tid), viewer == t["from_id"])
         return t
 
+    # ------------------------------------------------------------ logistics
+    def recommend_delivery(self, tid: int) -> dict:
+        with session() as c:
+            t = next(iter(rows(c, "SELECT * FROM transfers WHERE id=?", (tid,))), None)
+        if not t:
+            raise ExchangeError(f"Transfer #{tid} not found")
+        return {"hours": t["hours"], **logistics.recommend_mode(float(t["hours"] or 0), t["medicine_id"], int(t["qty"]))}
+
+    def arrange_delivery(self, tid: int, actor: str, mode: str, vehicle: str = "", driver: str = "") -> dict:
+        with session() as c:
+            t = next(iter(rows(c, "SELECT * FROM transfers WHERE id=?", (tid,))), None)
+            if not t:
+                raise ExchangeError(f"Transfer #{tid} not found")
+            if actor != t["from_id"] or actor not in self.e.H:
+                raise ExchangeError("Only the donor arranges delivery")
+            if t["status"] != "approved":
+                raise ExchangeError("Delivery is arranged once the transfer is approved and before it is dispatched")
+            s = logistics.arrange(c, t, mode, vehicle, driver, self.name(t["from_id"]), self.name(t["to_id"]))
+            post_message(c, actor, t["to_id"], f"{self.name(actor)} arranged delivery for transfer #{tid}: "
+                         f"{logistics.MODE_LABEL[mode]}" + (f", {logistics.describe(s)}." if mode != "district" else
+                         ": waiting for the district office to assign a vehicle."), "system", transfer_id=tid)
+            if mode == "district":
+                post_message(c, actor, "DIST", f"Vehicle needed for transfer #{tid}: {t['qty']:,} units of "
+                             f"{self.e.M[t['medicine_id']]['name']} from {self.name(t['from_id'])} to {self.name(t['to_id'])} "
+                             f"(~{t['hours']} h).", "system", transfer_id=tid)
+        return self.transfer(tid, actor)
+
+    def assign_vehicle(self, shipment_id: int, actor: str, vehicle: str, driver: str) -> dict:
+        if actor != "DIST":
+            raise ExchangeError("Only the district logistics office assigns pool vehicles")
+        with session() as c:
+            s = logistics.assign_district(c, shipment_id, vehicle, driver)
+            t = rows(c, "SELECT * FROM transfers WHERE id=?", (s["transfer_id"],))[0]
+            for party in (t["from_id"], t["to_id"]):
+                post_message(c, "DIST", party, f"District office assigned {logistics.describe(s)} to transfer #{t['id']}. "
+                             f"{self.name(t['from_id'])} can dispatch.", "system", transfer_id=t["id"])
+        return self.transfer(t["id"], actor)
+
+    def webhook(self, evt: dict) -> dict:
+        with session() as c:
+            out = logistics.apply_event(c, evt)
+            if not out["duplicate"] and evt.get("type") in ("delayed", "breakdown", "exception", "arrived"):
+                s = next(iter(rows(c, "SELECT * FROM shipments WHERE id=?", (out["shipment_id"],))))
+                t = rows(c, "SELECT * FROM transfers WHERE id=?", (s["transfer_id"],))[0]
+                what = {"arrived": "arrived at the door, waiting for the receiver to confirm"}.get(
+                    evt["type"], f"is delayed ({evt.get('note') or 'carrier report'}), new ETA {logistics.parse(s['eta_at']):%H:%M}")
+                for party in (t["from_id"], t["to_id"]):
+                    post_message(c, "CARRIER", party, f"Shipment for transfer #{t['id']} {what}.", "system", transfer_id=t["id"])
+        self.e.invalidate()
+        return out
+
+    def simulate_delay(self, shipment_id: int, hours: float, reason: str = "") -> dict:
+        with session() as c:
+            s = logistics.simulate_delay(c, shipment_id, hours, reason)
+            t = rows(c, "SELECT * FROM transfers WHERE id=?", (s["transfer_id"],))[0]
+            if s["mode"] != "courier":      # a courier reports its own delays through the webhook
+                for party in (t["from_id"], t["to_id"]):
+                    post_message(c, "SYSTEM", party, f"Shipment for transfer #{t['id']} is delayed by {hours:g} h, "
+                                 f"new ETA {logistics.parse(s['eta_at']):%H:%M}.", "system", transfer_id=t["id"])
+        self.e.invalidate()
+        return {"ok": True}
+
+    def logistics_board(self, viewer: str | None = None) -> dict:
+        logistics.sync_couriers()
+        logistics.refresh()
+        with session() as c:
+            ships = rows(c, "SELECT * FROM shipments ORDER BY COALESCE(dispatched_at, created_at) DESC, id DESC")
+            out, queue = [], []
+            for s in ships:
+                t = rows(c, "SELECT * FROM transfers WHERE id=?", (s["transfer_id"],))[0]
+                if viewer in self.e.H and viewer not in (t["from_id"], t["to_id"]):
+                    continue
+                item = logistics.public(c, s, viewer == t["from_id"])
+                item.update(from_id=t["from_id"], to_id=t["to_id"], medicine_id=t["medicine_id"], qty=t["qty"],
+                            transfer_status=t["status"])
+                out.append(item)
+                if s["mode"] == "district" and s["status"] == "requested":
+                    queue.append(item)
+            discrepancies = rows(c, "SELECT * FROM discrepancies ORDER BY id DESC LIMIT 50")
+            now = logistics.stamp(c)
+        return {"shipments": out, "district_queue": queue, "discrepancies": discrepancies, "sim_now": now}
+
     def board(self, hospital: str | None = None) -> dict:
+        if hospital == "DIST":
+            hospital = "NET"
+        logistics.refresh()
         with session() as c:
             ts = rows(c, "SELECT * FROM transfers ORDER BY id DESC")
             offers = rows(c, "SELECT * FROM offers ORDER BY id DESC")
@@ -371,6 +475,9 @@ class Exchange:
                             (hospital, hospital))
             else:
                 msgs = rows(c, "SELECT * FROM messages ORDER BY id DESC LIMIT 200")
+            ships = {s["transfer_id"]: s for s in rows(c, "SELECT * FROM shipments")}
+            for t in ts:
+                t["shipment"] = logistics.public(c, ships.get(t["id"]), hospital == t["from_id"])
         for t in ts:
             t["allocations"] = json.loads(t["allocations"] or "[]")
         if hospital and hospital != "NET":
