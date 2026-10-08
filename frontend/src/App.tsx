@@ -173,7 +173,7 @@ export default function App() {
           </div>
         )}
 
-        <div className={`transition-[padding] duration-200 lg:pl-64 ${copilot ? "xl:pr-96" : ""}`}>
+        <div className="lg:pl-64">
           <header className="glass sticky top-0 z-20">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
               <button className="rounded-lg p-2 hover:bg-slate-100 lg:hidden" onClick={() => setMenu(true)} aria-label="Open menu"><Menu size={20} /></button>
@@ -187,7 +187,6 @@ export default function App() {
                 <option value="NET">Network admin</option>
                 {m.hospitals.map((h) => <option key={h.id} value={h.id}>{h.id} · {h.name}</option>)}
               </Select>
-              <Button variant={copilot ? "subtle" : "secondary"} size="sm" icon={<Bot size={14} />} onClick={() => setCopilot((v) => !v)}>Sentinel</Button>
               <Button variant="secondary" size="sm" icon={<RefreshCw size={14} />} onClick={() => act(() => post("/reset"), "Demo data regenerated")}>Reset demo</Button>
             </div>
           </header>
@@ -202,7 +201,7 @@ export default function App() {
           </main>
         </div>
 
-        <CopilotDock open={copilot} onClose={() => setCopilot(false)} path={route?.path ?? path} />
+        <CopilotDock open={copilot} onOpen={() => setCopilot(true)} onClose={() => setCopilot(false)} path={route?.path ?? path} />
 
         {toast && (
           <div role="status" onClick={() => setToast(null)}
