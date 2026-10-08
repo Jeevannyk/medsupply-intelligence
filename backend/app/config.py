@@ -3,6 +3,24 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_env(*files: Path) -> None:
+    """Minimal .env loader (KEY=value lines). Real environment variables win."""
+    for f in files:
+        if not f.is_file():
+            continue
+        for line in f.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            v = v.strip().strip('"').strip("'")
+            if v:
+                os.environ.setdefault(k.strip(), v)
+
+
+load_env(ROOT / ".env", ROOT.parent / ".env")
 DB_PATH = Path(os.environ.get("MEDSUPPLY_DB", ROOT / "medsupply.db"))
 
 # "Today" for the simulation. History covers the 120 days before today;

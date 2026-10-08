@@ -51,10 +51,7 @@ Click **Reset demo** in the header (or `POST /api/reset`). It regenerates the da
 
 ### Optional: Gemini assistant
 
-```powershell
-$env:GEMINI_API_KEY = "your-key"        # optional: $env:GEMINI_MODEL = "gemini-2.5-flash"
-.venv\Scripts\python -m uvicorn app.main:app --port 8000
-```
+Copy `backend/.env.example` to `backend/.env` and paste the key after `GEMINI_API_KEY=` and `GEMINI_MODEL=gemini-3.1-flash-lite` (the model name is read only from `.env`; there is no default, and without it the assistant stays in rules mode). `.env` is gitignored. Restart uvicorn after editing it. A real environment variable (`$env:GEMINI_API_KEY`) takes priority over the file.
 
 Without a key the assistant calls the same backend tools and fills answer templates (answer footer shows `mode: rules`). With a key it shows `mode: gemini:...`. If Gemini fails it falls back to rules and says so. The Gemini path has not been tested against the live API.
 

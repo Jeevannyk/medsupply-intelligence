@@ -11,10 +11,11 @@ import urllib.request
 
 from .engine import Engine
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 SYSTEM = ("You are the Medical Supply Intelligence assistant for a network of 8 hospitals. "
           "Answer hospital administrators in plain language. ALWAYS call tools to get data and ONLY use numbers "
           "returned by tools; never estimate or invent figures. If the tools cannot answer, say so. "
+          "Use risk labels exactly as the tools return them (stockout, critical, high, watch); never upgrade or downgrade severity. "
+          "Always give days to stock-out and lead time when a tool provides them. "
           "Be concise (under 150 words), lead with the answer, use short bullet points for lists, "
           "and name hospitals by name and letter, e.g. 'City General Hospital (A)'.")
 
@@ -142,7 +143,7 @@ class Assistant:
         return out
 
     # ------------------------------------------------------------- gemini
-    def gemini(self, question, scenario, key):
+    def gemini(self, question, scenario, key, model):
         tools = self.tools(scenario)
         contents = [{"role": "user", "parts": [{"text": question}]}]
         used = []
@@ -151,7 +152,7 @@ class Assistant:
                     "tools": [{"functionDeclarations": self.declarations()}],
                     "generationConfig": {"temperature": 0.2}}
             req = urllib.request.Request(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": key})
             with urllib.request.urlopen(req, timeout=30) as r:
                 data = json.loads(r.read())
@@ -159,7 +160,7 @@ class Assistant:
             calls = [p["functionCall"] for p in content.get("parts", []) if "functionCall" in p]
             if not calls:
                 text = "".join(p.get("text", "") for p in content.get("parts", []))
-                return {"answer": text.strip(), "mode": f"gemini:{GEMINI_MODEL}", "tools": used}
+                return {"answer": text.strip(), "mode": f"gemini:{model}", "tools": used}
             contents.append(content)
             parts = []
             for call in calls:
@@ -279,10 +280,14 @@ class Assistant:
         return {"answer": ans, "mode": "rules", "tools": used}
 
     def ask(self, question, scenario="outbreak"):
-        key = os.environ.get("GEMINI_API_KEY")
+        key, model = os.environ.get("GEMINI_API_KEY"), os.environ.get("GEMINI_MODEL")
+        if key and not model:
+            res = self.rules(question, scenario)
+            res["note"] = "GEMINI_MODEL is not set in .env; answered from backend data directly."
+            return res
         if key:
             try:
-                return self.gemini(question, scenario, key)
+                return self.gemini(question, scenario, key, model)
             except Exception as ex:   # fall back to grounded templates
                 res = self.rules(question, scenario)
                 res["note"] = f"Gemini unavailable ({type(ex).__name__}); answered from backend data directly."

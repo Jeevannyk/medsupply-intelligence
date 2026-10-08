@@ -13,4 +13,5 @@ frontend/dist/
 # secrets / local
 .env
 .env.*
+!.env.example
 .claude/
