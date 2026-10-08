@@ -159,6 +159,7 @@ class Engine:
             order = round_up(float(fc.ext[s][L:L + 14].sum()) - at_L) if level != "ok" else 0
             cells[(h, m)] = dict(
                 hospital=h, medicine=m, stock=int(stock), on_hand=int(on_hand),
+                physical=int(sum(b.qty for b in phys.get((h, m), []))),   # in the store room; moves only on receive
                 incoming=int(incoming.get((h, m), 0)), outgoing=int(outgoing.get((h, m), 0)),
                 daily_forecast=round(daily, 1), forecast_7d=int(round(fc.p50[s][:7].sum())),
                 forecast_14d=int(round(fc.p50[s].sum())),
@@ -270,10 +271,12 @@ class Engine:
                     waste=sims[(h, m)][1].wasted, demand=fc.ext[s], unmet=sims[(h, m)][1].unmet))
             planned = optimizer.plan(parties, self.hours)
             planned += optimizer.rescue(parties, self.hours, planned)
+            keeps = {}
+            planned += self._emergency_loans(fc, cells, parties, planned, m, keeps)
             received = {}
             waste_left = {}
             for mv in planned:
-                if mv["kind"] == "need":
+                if mv["kind"] in ("need", "emergency"):
                     received[mv["to"]] = received.get(mv["to"], 0) + mv["qty"]
                 rc, dc = cells[(mv["to"], m)], cells[(mv["from"], m)]
                 rescued = 0
@@ -296,6 +299,12 @@ class Engine:
                     why = [f"these units would otherwise expire unused at {self.H[mv['from']]['name']} in {exp} days",
                            f"{self.H[mv['to']]['name']} is projected to run short of {med['name']} before then "
                            f"(stock lasts {rc['days_to_stockout']} days), so this replaces part of its next order"]
+                elif mv["kind"] == "emergency":
+                    why = [f"{self.H[mv['to']]['name']} runs out in {rc['days_to_stockout']} days but resupply takes "
+                           f"{rc['lead_days']} days, and no hospital holds stock above its normal 14-day safety reserve",
+                           f"{self.H[mv['from']]['name']} lends only what it can spare while keeping "
+                           f"{keeps.get(mv['from'], 0):,} {med['unit']} for its own {dc['lead_days']}-day resupply wait "
+                           f"plus a {SAFETY_DAYS}-day buffer, and should reorder to replace the loan"]
                 else:
                     why = [f"{self.H[mv['to']]['name']} runs out in {rc['days_to_stockout']} days but resupply takes "
                            f"{rc['lead_days']} days"]
@@ -317,10 +326,48 @@ class Engine:
                     if cell["need"] - got >= 1:
                         shortfalls.append({"hospital": h, "medicine": m, "need": cell["need"], "received": got,
                                            "shortfall": cell["need"] - got,
-                                           "priority": cell["priority"]["score"]})
+                                           "priority": cell["priority"]["score"],
+                                           "lead_days": cell["lead_days"],
+                                           "alternative": cell["priority"]["alternative"],
+                                           "alternative_spare_days": cell["priority"]["alternative_spare_days"]})
         for i, mv in enumerate(moves):
             mv["id"] = f"M{i + 1}"
+            mv["key"] = f'{mv["medicine"]}:{mv["from"]}>{mv["to"]}:{mv["kind"]}'   # stable across re-plans
         return {"moves": moves, "shortfalls": shortfalls}
+
+    def _emergency_loans(self, fc, cells, parties, planned, m, keeps):
+        """Second optimiser run for need that normal transfers could not cover.  A normal donor must keep
+        its P90 demand for 14 days; here a donor only has to cover its own supplier lead time plus the
+        safety buffer (it will reorder), so hospitals with long cover can lend the difference."""
+        got = {}
+        shipped, out_by = {}, {}
+        for mv in planned:
+            if mv["kind"] in ("need", "emergency"):
+                got[mv["to"]] = got.get(mv["to"], 0) + mv["qty"]
+            out_by[mv["from"]] = out_by.get(mv["from"], 0) + mv["qty"]
+            for a in mv["allocations"]:
+                shipped[a["batch_id"]] = shipped.get(a["batch_id"], 0) + a["qty"]
+        resid = {p.hospital: p.need - got.get(p.hospital, 0) for p in parties}
+        if not any(r >= 1 for r in resid.values()):
+            return []
+        eparties = []
+        for p in parties:
+            cell = cells[(p.hospital, m)]
+            s = fc.index[(p.hospital, m)]
+            need = max(0.0, resid[p.hospital])
+            lend = 0.0
+            if need < 1 and cell["need"] < 1 and cell["risk"] in ("ok", "watch"):
+                keep = float(fc.p90[s][:self.lead[(p.hospital, m)] + SAFETY_DAYS].sum())
+                keeps[p.hospital] = int(round(keep))
+                lend = max(0.0, sum(b.qty for b in p.batches) - out_by.get(p.hospital, 0) - keep)
+            batches = [Batch(b.id, b.qty - shipped.get(b.id, 0), b.exp, b.arrive, b.virtual)
+                       for b in p.batches if b.qty - shipped.get(b.id, 0) > 0]
+            eparties.append(optimizer.Party(hospital=p.hospital, need=need, surplus=lend, weight=p.weight,
+                                            batches=batches, waste={}, demand=p.demand, unmet=p.unmet))
+        loans = optimizer.plan(eparties, self.hours)
+        for mv in loans:
+            mv["kind"] = "emergency"
+        return loans
 
     # --------------------------------------------------------------- verify
     def apply_moves(self, cur, moves):
@@ -355,9 +402,9 @@ class Engine:
                    if a["expires_in_days"] - mv["arrival_day"] < 2]
         check("No stock shipped that expires before it can be used", not bad_exp,
               "every shipped batch has ≥2 usable days after arrival" if not bad_exp else ", ".join(bad_exp))
-        over = [mv["id"] for mv in moves if mv["kind"] == "need" and
+        over = [mv["id"] for mv in moves if mv["kind"] in ("need", "emergency") and
                 sum(x["qty"] for x in moves if x["to"] == mv["to"] and x["medicine"] == mv["medicine"]
-                    and x["kind"] == "need") > cells[(mv["to"], mv["medicine"])]["need"]]
+                    and x["kind"] in ("need", "emergency")) > cells[(mv["to"], mv["medicine"])]["need"]]
         check("Shortage transfers never exceed the recipient's need", not over,
               "received ≤ unmet demand before supplier resupply" if not over else ", ".join(set(over)))
         late = [mv["id"] for mv in moves if mv["recipient_days_to_stockout"] is not None
@@ -390,10 +437,14 @@ class Engine:
             }
             row["balanced"] = row["before"] - row["out"] + row["in"] == row["after"]
             ledger.append(row)
-            if out_q and row["unmet_14d_after"] > row["unmet_14d_before"]:
+            lender = any(mv["kind"] == "emergency" and mv["from"] == h and mv["medicine"] == m for mv in moves)
+            gained = (row["unmet_window_after"] > row["unmet_window_before"]) if lender \
+                else (row["unmet_14d_after"] > row["unmet_14d_before"])
+            if out_q and gained:
                 donor_bad.append(f"{h}/{m}")
-        check("Donors stay covered for the 14-day horizon", not donor_bad,
-              "no donor gains unmet demand" if not donor_bad else ", ".join(donor_bad))
+        check("Donors stay covered", not donor_bad,
+              "no donor gains unmet demand (14 days; emergency lenders: until their own resupply arrives)"
+              if not donor_bad else ", ".join(donor_bad))
         new_waste = [f"{r['hospital']}/{r['medicine']}" for r in ledger
                      if r["in"] and r["waste_after"] > r["waste_before"] + 5]
         check("No transfer creates new waste at the recipient", not new_waste,
@@ -404,6 +455,7 @@ class Engine:
         summary = {
             "moves": len(moves), "units_moved": sum(mv["qty"] for mv in moves),
             "rescue_moves": sum(1 for mv in moves if mv["kind"] == "rescue"),
+            "emergency_moves": sum(1 for mv in moves if mv["kind"] == "emergency"),
             "unmet_window_before": sum(r["unmet_window_before"] for r in ledger),
             "unmet_window_after": sum(r["unmet_window_after"] for r in ledger),
             "unmet_14d_before": sum(r["unmet_14d_before"] for r in ledger),

@@ -73,7 +73,9 @@ class Assistant:
                     "verified": an["verification"]["passed"],
                     "checks": [c["name"] for c in an["verification"]["checks"] if c["passed"]],
                     "uncovered_shortfalls": [{"hospital": hn(s["hospital"]), "medicine": e.M[s["medicine"]]["name"],
-                                              "shortfall_units": s["shortfall"]} for s in an["plan"]["shortfalls"]
+                                              "shortfall_units": s["shortfall"], "substitute": s.get("alternative"),
+                                              "substitute_spare_days": s.get("alternative_spare_days")}
+                                             for s in an["plan"]["shortfalls"]
                                              if (not medicine or s["medicine"] == medicine)],
                     "supplier_orders": [o["text"] for o in an["orders"] if (not medicine or o["medicine"] == medicine)]}
 
@@ -248,10 +250,21 @@ class Assistant:
             if r["moves"]:
                 ans = (f"Recommended transfers ({r['units_moved']:,} units, verification "
                        f"{'passed' if r['verified'] else 'FAILED'}):\n" +
-                       "\n".join(f"• {m['move']}. Why: {m['why']}" for m in r["moves"][:6]))
+                       "\n".join(f"• {'[emergency loan] ' if m['kind'] == 'emergency' else ''}{m['move']}. Why: {m['why']}"
+                                  for m in r["moves"][:6]))
                 if r["uncovered_shortfalls"]:
                     ans += "\nStill short after transfers: " + "; ".join(
                         f"{s['hospital']} {s['medicine']} {s['shortfall_units']:,}" for s in r["uncovered_shortfalls"])
+                if r["supplier_orders"]:
+                    ans += "\nTo close the gap, order from the supplier: " + " ".join(r["supplier_orders"][:3])
+            elif r["uncovered_shortfalls"]:
+                ans = ("No hospital has stock it can safely transfer for that selection, so supplier orders are the fix. "
+                       "Still short: " + "; ".join(
+                           f"{s['hospital']} {s['medicine']} {s['shortfall_units']:,}"
+                           + (f" (substitute: {s['substitute']}, about {s['substitute_spare_days']:.0f} spare days)"
+                              if s["substitute"] and s["substitute_spare_days"] >= 3 else "")
+                           for s in r["uncovered_shortfalls"]) +
+                       ("\nOrders to place today: " + " ".join(r["supplier_orders"][:3]) if r["supplier_orders"] else ""))
             else:
                 ans = "No transfers are needed for that selection."
         elif any(w in q for w in ("outbreak", "spike", "surge", "anomal")):
@@ -277,6 +290,12 @@ class Assistant:
             ans = (f"{r['count']} hospital-medicine pairs at risk within {days} days:\n" +
                    "\n".join(f"• {x['warning']}" for x in r["risks"][:8])) if r["risks"] else \
                 f"No hospital is projected to run out within {days} days."
+            if r["risks"]:
+                p = call("redistribution_plan", medicine=med, hospital=hosp)
+                if p["moves"]:
+                    ans += "\nSuggested transfers:\n" + "\n".join(f"• {m['move']}" for m in p["moves"][:3])
+                if p["supplier_orders"]:
+                    ans += "\nSuggested supplier orders: " + " ".join(p["supplier_orders"][:2])
         return {"answer": ans, "mode": "rules", "tools": used}
 
     def ask(self, question, scenario="outbreak"):

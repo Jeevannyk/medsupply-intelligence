@@ -10,11 +10,13 @@ from pydantic import BaseModel
 from . import generate
 from .assistant import Assistant
 from .config import DB_PATH, DEFAULT_WEIGHTS, SCENARIOS, TODAY
+from .db import ensure_schema
 from .engine import Engine
 from .exchange import Exchange, ExchangeError
 
 if not DB_PATH.exists():
     generate.generate()
+ensure_schema()
 
 engine = Engine()
 exchange = Exchange(engine)
@@ -112,6 +114,7 @@ class Offer(BaseModel):
     qty: int
     batch_id: str | None = None
     note: str = ""
+    target: str | None = None      # None = broadcast to every hospital
     scenario: str = "outbreak"
 
 
@@ -126,12 +129,17 @@ class StockRequest(BaseModel):
     qty: int
     needed_within_days: int = 7
     note: str = ""
+    target: str | None = None      # None = broadcast to every hospital
     scenario: str = "outbreak"
 
 
 class Respond(BaseModel):
     donor: str
     qty: int
+
+
+class Who(BaseModel):
+    hospital: str
 
 
 class Message(BaseModel):
@@ -164,7 +172,7 @@ def act(tid: int, body: Action):
 @app.post("/api/offers")
 def post_offer(body: Offer):
     return exchange.post_offer(check_scenario(body.scenario), body.hospital, body.medicine, body.qty,
-                               body.batch_id, body.note)
+                               body.batch_id, body.note, body.target)
 
 
 @app.post("/api/offers/{oid}/claim")
@@ -175,12 +183,32 @@ def claim(oid: int, body: Claim):
 @app.post("/api/requests")
 def post_request(body: StockRequest):
     return exchange.post_request(check_scenario(body.scenario), body.hospital, body.medicine, body.qty,
-                                 body.needed_within_days, body.note)
+                                 body.needed_within_days, body.note, body.target)
 
 
 @app.post("/api/requests/{rid}/respond")
 def respond(rid: int, body: Respond):
     return exchange.respond_request(rid, body.donor, body.qty)
+
+
+@app.post("/api/offers/{oid}/decline")
+def decline_offer(oid: int, body: Who):
+    return exchange.decline("offers", oid, body.hospital)
+
+
+@app.post("/api/offers/{oid}/withdraw")
+def withdraw_offer(oid: int, body: Who):
+    return exchange.withdraw("offers", oid, body.hospital)
+
+
+@app.post("/api/requests/{rid}/decline")
+def decline_request(rid: int, body: Who):
+    return exchange.decline("requests", rid, body.hospital)
+
+
+@app.post("/api/requests/{rid}/withdraw")
+def withdraw_request(rid: int, body: Who):
+    return exchange.withdraw("requests", rid, body.hospital)
 
 
 @app.post("/api/messages")

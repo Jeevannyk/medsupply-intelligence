@@ -83,7 +83,7 @@ def test_offer_broadcast_and_claim(client):
     assert r["offer_id"]
     taker = (r["suggested_takers"] or [{"hospital": "A"}])[0]["hospital"]
     t = client.post(f"/api/offers/{r['offer_id']}/claim", json={"hospital": taker, "qty": 100}).json()
-    assert t["status"] == "pending" and t["awaiting"] == "F" and t["qty"] == 100
+    assert t["status"] == "approved" and t["awaiting"] == "F" and t["qty"] == 100   # agreed; F dispatches next
     board = client.get("/api/exchange", params={"hospital": taker}).json()
     assert any(m["offer_id"] == r["offer_id"] for m in board["messages"])
 
@@ -92,7 +92,7 @@ def test_request_and_response(client):
     r = client.post("/api/requests", json={"hospital": "E", "medicine": "CEFT", "qty": 50}).json()
     donor = (r["suggested_donors"] or [{"hospital": "B"}])[0]["hospital"]
     t = client.post(f"/api/requests/{r['request_id']}/respond", json={"donor": donor, "qty": 20}).json()
-    assert t["awaiting"] == "E" and t["from_id"] == donor
+    assert t["status"] == "approved" and t["awaiting"] == donor and t["from_id"] == donor
 
 
 def test_assistant_is_grounded(client):

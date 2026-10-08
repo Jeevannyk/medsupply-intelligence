@@ -1,11 +1,13 @@
 """Hospital exchange: how hospitals talk to each other about stock.
 
-* A hospital with excess stock broadcasts a surplus OFFER; the network AI
-  suggests which hospitals can use it before it expires and messages them.
-* A hospital short of stock broadcasts a REQUEST; the AI suggests donors.
-* Either side (or the AI plan) opens a TRANSFER. Life cycle:
-    pending (awaiting the other party) -> approved -> in_transit -> delivered
-    (or declined / cancelled). Delivery moves the batch in the database.
+* A hospital with excess stock posts an OFFER, to one named hospital or to everyone.
+* A hospital short of stock posts a REQUEST, to one named hospital or to everyone.
+* The other side answers: a named hospital accepts or declines; for a broadcast any hospital may accept.
+  Accepting means both sides agree, so it opens a TRANSFER that is already approved.
+* The network AI plan proposes transfers too; the donor approves or declines them.
+  Transfer life cycle: pending (AI proposal only) -> approved -> in_transit -> delivered
+  (or declined / cancelled). Delivery moves the batch in the database.
+* The network admin only watches and proposes; it never approves, declines, dispatches or receives.
 * Every step posts a message, so each transfer carries its own thread.
 """
 import json
@@ -71,7 +73,7 @@ class Exchange:
     def name(self, h):
         return self.e.H[h]["name"] if h in self.e.H else ("Network AI" if h == "AI" else h)
 
-    def _create(self, c, medicine, frm, to, allocations, origin, reason, awaiting, initiator):
+    def _create(self, c, medicine, frm, to, allocations, origin, reason, awaiting, initiator, status="pending"):
         if frm == to:
             raise ExchangeError("Donor and recipient must differ")
         qty = sum(a["qty"] for a in allocations)
@@ -79,23 +81,28 @@ class Exchange:
         cur = c.execute(
             "INSERT INTO transfers (medicine_id, from_id, to_id, qty, allocations, status, awaiting, origin, "
             "reason, hours, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (medicine, frm, to, qty, json.dumps(allocations), "pending", awaiting, origin, reason, hours, now(), now()))
+            (medicine, frm, to, qty, json.dumps(allocations), status, awaiting, origin, reason, hours, now(), now()))
         tid = cur.lastrowid
         med = self.e.M[medicine]
+        tail = (f"Awaiting approval from {self.name(awaiting)}." if status == "pending"
+                else f"Agreed by both hospitals. {self.name(frm)} to dispatch.")
         post_message(c, initiator, awaiting,
                      f"Transfer #{tid}: {qty:,} {med['unit']} of {med['name']} from {self.name(frm)} to "
-                     f"{self.name(to)} (~{hours} h). {reason} Awaiting approval from {self.name(awaiting)}.",
+                     f"{self.name(to)} (~{hours} h). {reason} {tail}",
                      "system", transfer_id=tid)
         return tid
 
     # ------------------------------------------------------------ AI plan
     def send_plan(self, scenario, weights, move_ids=None) -> list[int]:
+        """Open transfers for the selected moves only (matched by stable key or id).
+        move_ids=None sends the whole plan; an empty list sends nothing."""
         a = self.e.analysis(scenario, weights)
+        chosen = [mv for mv in a["plan"]["moves"] if move_ids is None or mv["key"] in move_ids or mv["id"] in move_ids]
+        if move_ids is not None and not chosen:
+            raise ExchangeError("The selected transfers are no longer in the plan. Refresh and select again.")
         ids = []
         with session() as c:
-            for mv in a["plan"]["moves"]:
-                if move_ids and mv["id"] not in move_ids:
-                    continue
+            for mv in chosen:
                 tid = self._create(c, mv["medicine"], mv["from"], mv["to"], mv["allocations"], "ai_plan",
                                    mv["reason"], awaiting=mv["from"], initiator="AI")
                 post_message(c, "AI", mv["to"],
@@ -113,31 +120,33 @@ class Exchange:
             if not t:
                 raise ExchangeError(f"Transfer #{tid} not found")
             st, frm, to = t["status"], t["from_id"], t["to_id"]
-            admin = actor == "NET"
+            if actor not in self.e.H:
+                raise ExchangeError("Only a hospital node can approve, decline, dispatch, receive or cancel a transfer. "
+                                    "The network admin can propose transfers but not act on them.")
             med = self.e.M[t["medicine_id"]]
             label = f"{t['qty']:,} {med['unit']} of {med['name']}"
             if action == "approve":
-                if st != "pending" or not (admin or actor == t["awaiting"]):
+                if st != "pending" or actor != t["awaiting"]:
                     raise ExchangeError("Only the awaited party can approve a pending transfer")
                 new, awaiting, body = "approved", frm, f"{self.name(actor)} approved transfer #{tid} ({label})."
             elif action == "decline":
-                if st != "pending" or not (admin or actor in (frm, to)):
+                if st != "pending" or actor not in (frm, to):
                     raise ExchangeError("Only a pending transfer can be declined by its parties")
                 new, awaiting, body = "declined", None, f"{self.name(actor)} declined transfer #{tid} ({label})."
             elif action == "dispatch":
-                if st != "approved" or not (admin or actor == frm):
+                if st != "approved" or actor != frm:
                     raise ExchangeError("Only the donor can dispatch an approved transfer")
                 eta = datetime.now() + timedelta(hours=t["hours"] or 0)
                 new, awaiting = "in_transit", to
                 body = f"{self.name(frm)} dispatched transfer #{tid} ({label}). ETA {eta:%H:%M}."
             elif action == "receive":
-                if st != "in_transit" or not (admin or actor == to):
+                if st != "in_transit" or actor != to:
                     raise ExchangeError("Only the recipient can confirm receipt of an in-transit transfer")
                 self._deliver(c, t)
                 new, awaiting = "delivered", None
                 body = f"{self.name(to)} received transfer #{tid} ({label}). Stock records updated."
             elif action == "cancel":
-                if st not in ("pending", "approved") or not (admin or actor in (frm, to)):
+                if st not in ("pending", "approved") or actor not in (frm, to):
                     raise ExchangeError("Only pending or approved transfers can be cancelled")
                 new, awaiting, body = "cancelled", None, f"{self.name(actor)} cancelled transfer #{tid} ({label})."
             else:
@@ -162,6 +171,18 @@ class Exchange:
                        src["expiry_date"], TODAY.isoformat(), f"transfer #{t['id']} from {t['from_id']}"))
 
     # ------------------------------------------------------ offers/requests
+    def _check_party(self, hospital, target=None):
+        if hospital not in self.e.H:
+            raise ExchangeError("Offers and requests are posted by a hospital node, not the network admin")
+        if target in ("", "ALL"):
+            target = None
+        if target is not None:
+            if target not in self.e.H:
+                raise ExchangeError(f"Unknown hospital {target}")
+            if target == hospital:
+                raise ExchangeError("Choose a different hospital")
+        return target
+
     def suggest_takers(self, scenario, hospital, medicine, expiry_days, limit=4):
         out = []
         for h in self.e.H:
@@ -178,8 +199,12 @@ class Exchange:
                for c in a["cells"] if c["medicine"] == medicine and c["hospital"] != hospital and c["surplus"] >= 10]
         return sorted(out, key=lambda x: (x["hours"], -x["surplus"]))[:limit]
 
-    def post_offer(self, scenario, hospital, medicine, qty, batch_id=None, note=""):
+    def post_offer(self, scenario, hospital, medicine, qty, batch_id=None, note="", target=None):
+        target = self._check_party(hospital, target)
         med = self.e.M[medicine]
+        qty = int(qty)
+        if qty <= 0:
+            raise ExchangeError("Quantity must be positive")
         with session() as c:
             if batch_id:
                 b = next(iter(rows(c, "SELECT * FROM batches WHERE batch_id=? AND hospital_id=?", (batch_id, hospital))), None)
@@ -192,71 +217,136 @@ class Exchange:
                 expiry = bs[0]["expiry_date"] if bs else (TODAY + timedelta(days=180)).isoformat()
             allocate(c, hospital, medicine, qty, 0, batch_id)   # validates free stock
             cur = c.execute("INSERT INTO offers (hospital_id, medicine_id, batch_id, qty, remaining, expiry_date, note, "
-                            "status, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                            (hospital, medicine, batch_id, qty, qty, expiry, note, "open", now()))
+                            "status, created_at, target) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (hospital, medicine, batch_id, qty, qty, expiry, note, "open", now(), target))
             oid = cur.lastrowid
-            takers = self.suggest_takers(scenario, hospital, medicine, days_until(expiry))
-            sugg = ", ".join(f"{self.name(t['hospital'])} (can use {t['can_use']:,})" for t in takers) or "none yet"
-            post_message(c, hospital, "ALL",
-                         f"Surplus offer #{oid}: {qty:,} {med['unit']} of {med['name']} available, expires {expiry}. "
-                         f"{note} AI-matched takers: {sugg}.", "offer", offer_id=oid)
-            for t in takers:
-                post_message(c, "AI", t["hospital"],
-                             f"{self.name(hospital)} is offering {med['name']} (offer #{oid}). Your projected unmet demand "
-                             f"before it expires is {t['can_use']:,} {med['unit']}; claim it to cut your next order.",
-                             "match", offer_id=oid)
+            takers = [] if target else self.suggest_takers(scenario, hospital, medicine, days_until(expiry))
+            if target:
+                post_message(c, hospital, target,
+                             f"{self.name(hospital)} offers you {qty:,} {med['unit']} of {med['name']} (expires {expiry}). "
+                             f"{note} Accept or decline in Offers & requests.", "offer", offer_id=oid)
+            else:
+                sugg = ", ".join(f"{self.name(t['hospital'])} (can use {t['can_use']:,})" for t in takers) or "none yet"
+                post_message(c, hospital, "ALL",
+                             f"Surplus offer #{oid}: {qty:,} {med['unit']} of {med['name']} available, expires {expiry}. "
+                             f"{note} AI-matched takers: {sugg}.", "offer", offer_id=oid)
+                for t in takers:
+                    post_message(c, "AI", t["hospital"],
+                                 f"{self.name(hospital)} is offering {med['name']} (offer #{oid}). Your projected unmet demand "
+                                 f"before it expires is {t['can_use']:,} {med['unit']}; accept it to cut your next order.",
+                                 "match", offer_id=oid)
         self.e.invalidate()
-        return {"offer_id": oid, "suggested_takers": takers}
+        return {"offer_id": oid, "suggested_takers": takers, "target": target}
 
     def claim_offer(self, offer_id, hospital, qty):
+        """The taker accepts an offer (a named hospital's, or any broadcast one)."""
+        if hospital not in self.e.H:
+            raise ExchangeError("Only a hospital node can accept an offer")
         with session() as c:
             o = next(iter(rows(c, "SELECT * FROM offers WHERE id=?", (offer_id,))), None)
             if not o or o["status"] != "open":
                 raise ExchangeError("Offer is not open")
+            if hospital == o["hospital_id"]:
+                raise ExchangeError("You cannot accept your own offer")
+            if o["target"] and o["target"] != hospital:
+                raise ExchangeError(f"This offer is addressed to {self.name(o['target'])}")
             qty = min(int(qty), o["remaining"])
             if qty <= 0:
                 raise ExchangeError("Nothing left on this offer")
             allocs = allocate(c, o["hospital_id"], o["medicine_id"], qty, self.e.hours[(o["hospital_id"], hospital)],
                               o["batch_id"])
             tid = self._create(c, o["medicine_id"], o["hospital_id"], hospital, allocs, "offer",
-                               f"Claimed from surplus offer #{offer_id}.", awaiting=o["hospital_id"], initiator=hospital)
+                               f"{self.name(hospital)} accepted offer #{offer_id}.", awaiting=o["hospital_id"],
+                               initiator=hospital, status="approved")
             rem = o["remaining"] - qty
             c.execute("UPDATE offers SET remaining=?, status=? WHERE id=?", (rem, "open" if rem > 0 else "claimed", offer_id))
         self.e.invalidate()
         return self.transfer(tid)
 
-    def post_request(self, scenario, hospital, medicine, qty, needed_within_days=7, note=""):
+    def post_request(self, scenario, hospital, medicine, qty, needed_within_days=7, note="", target=None):
+        target = self._check_party(hospital, target)
         med = self.e.M[medicine]
+        qty = int(qty)
+        if qty <= 0:
+            raise ExchangeError("Quantity must be positive")
         with session() as c:
             cur = c.execute("INSERT INTO requests (hospital_id, medicine_id, qty, remaining, needed_within_days, note, "
-                            "status, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                            (hospital, medicine, qty, qty, needed_within_days, note, "open", now()))
+                            "status, created_at, target) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (hospital, medicine, qty, qty, needed_within_days, note, "open", now(), target))
             rid = cur.lastrowid
-            donors = self.suggest_donors(scenario, hospital, medicine)
-            sugg = ", ".join(f"{self.name(d['hospital'])} (spare {d['surplus']:,})" for d in donors) or "none with spare stock"
-            post_message(c, hospital, "ALL",
-                         f"Stock request #{rid}: {self.name(hospital)} needs {qty:,} {med['unit']} of {med['name']} "
-                         f"within {needed_within_days} days. {note} AI-suggested donors: {sugg}.", "request", request_id=rid)
-            for d in donors:
-                post_message(c, "AI", d["hospital"],
-                             f"{self.name(hospital)} needs {med['name']} (request #{rid}). You hold {d['surplus']:,} "
-                             f"{med['unit']} above your own 14-day P90 demand; {d['hours']} h away.", "match", request_id=rid)
+            donors = [] if target else self.suggest_donors(scenario, hospital, medicine)
+            if target:
+                post_message(c, hospital, target,
+                             f"{self.name(hospital)} asks you for {qty:,} {med['unit']} of {med['name']} within "
+                             f"{needed_within_days} days. {note} Accept or decline in Offers & requests.",
+                             "request", request_id=rid)
+            else:
+                sugg = ", ".join(f"{self.name(d['hospital'])} (spare {d['surplus']:,})" for d in donors) or "none with spare stock"
+                post_message(c, hospital, "ALL",
+                             f"Stock request #{rid}: {self.name(hospital)} needs {qty:,} {med['unit']} of {med['name']} "
+                             f"within {needed_within_days} days. {note} AI-suggested donors: {sugg}.", "request", request_id=rid)
+                for d in donors:
+                    post_message(c, "AI", d["hospital"],
+                                 f"{self.name(hospital)} needs {med['name']} (request #{rid}). You hold {d['surplus']:,} "
+                                 f"{med['unit']} above your own 14-day P90 demand; {d['hours']} h away.", "match", request_id=rid)
         self.e.invalidate()
-        return {"request_id": rid, "suggested_donors": donors}
+        return {"request_id": rid, "suggested_donors": donors, "target": target}
 
     def respond_request(self, request_id, donor, qty):
+        """A donor accepts a request (a named hospital's, or any broadcast one)."""
+        if donor not in self.e.H:
+            raise ExchangeError("Only a hospital node can accept a request")
         with session() as c:
             r = next(iter(rows(c, "SELECT * FROM requests WHERE id=?", (request_id,))), None)
             if not r or r["status"] != "open":
                 raise ExchangeError("Request is not open")
+            if donor == r["hospital_id"]:
+                raise ExchangeError("You cannot accept your own request")
+            if r["target"] and r["target"] != donor:
+                raise ExchangeError(f"This request is addressed to {self.name(r['target'])}")
             qty = min(int(qty), r["remaining"])
+            if qty <= 0:
+                raise ExchangeError("Nothing left on this request")
             allocs = allocate(c, donor, r["medicine_id"], qty, self.e.hours[(donor, r["hospital_id"])])
             tid = self._create(c, r["medicine_id"], donor, r["hospital_id"], allocs, "request",
-                               f"Response to stock request #{request_id}.", awaiting=r["hospital_id"], initiator=donor)
+                               f"{self.name(donor)} accepted request #{request_id}.", awaiting=donor,
+                               initiator=donor, status="approved")
             rem = r["remaining"] - qty
             c.execute("UPDATE requests SET remaining=?, status=? WHERE id=?", (rem, "open" if rem > 0 else "fulfilled", request_id))
         self.e.invalidate()
         return self.transfer(tid)
+
+    def decline(self, table, item_id, hospital):
+        """The addressed hospital declines an offer or request made to it."""
+        if table not in ("offers", "requests"):
+            raise ExchangeError("Unknown item")
+        with session() as c:
+            r = next(iter(rows(c, f"SELECT * FROM {table} WHERE id=?", (item_id,))), None)
+            if not r or r["status"] != "open":
+                raise ExchangeError("Item is not open")
+            if not r["target"] or r["target"] != hospital:
+                raise ExchangeError("Only the hospital it is addressed to can decline it")
+            c.execute(f"UPDATE {table} SET status='declined' WHERE id=?", (item_id,))
+            kind = "offer" if table == "offers" else "request"
+            med = self.e.M[r["medicine_id"]]
+            post_message(c, hospital, r["hospital_id"],
+                         f"{self.name(hospital)} declined your {kind} of {r['qty']:,} {med['unit']} of {med['name']}.",
+                         "system", **({"offer_id": item_id} if table == "offers" else {"request_id": item_id}))
+        return {"ok": True}
+
+    def withdraw(self, table, item_id, hospital):
+        """The poster takes back an offer or request that is still open."""
+        if table not in ("offers", "requests"):
+            raise ExchangeError("Unknown item")
+        with session() as c:
+            r = next(iter(rows(c, f"SELECT * FROM {table} WHERE id=?", (item_id,))), None)
+            if not r or r["status"] != "open":
+                raise ExchangeError("Item is not open")
+            if r["hospital_id"] != hospital:
+                raise ExchangeError("Only the hospital that posted it can withdraw it")
+            c.execute(f"UPDATE {table} SET status='withdrawn' WHERE id=?", (item_id,))
+        self.e.invalidate()
+        return {"ok": True}
 
     def message(self, sender, recipient, body, transfer_id=None):
         with session() as c:

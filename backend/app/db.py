@@ -55,13 +55,27 @@ CREATE TABLE IF NOT EXISTS transfers (
 CREATE TABLE IF NOT EXISTS offers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     hospital_id TEXT, medicine_id TEXT, batch_id TEXT, qty INTEGER,
-    remaining INTEGER, expiry_date TEXT, note TEXT, status TEXT, created_at TEXT);
+    remaining INTEGER, expiry_date TEXT, note TEXT, status TEXT, created_at TEXT, target TEXT);
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     hospital_id TEXT, medicine_id TEXT, qty INTEGER, remaining INTEGER,
-    needed_within_days INTEGER, note TEXT, status TEXT, created_at TEXT);
+    needed_within_days INTEGER, note TEXT, status TEXT, created_at TEXT, target TEXT);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT, sender TEXT, recipient TEXT, kind TEXT, body TEXT,
     transfer_id INTEGER, offer_id INTEGER, request_id INTEGER);
 """
+
+
+def ensure_schema() -> None:
+    """Bring an existing database up to date (adds the optional `target` hospital on offers and requests)."""
+    conn = connect()
+    try:
+        conn.executescript(SCHEMA)
+        for table in ("offers", "requests"):
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if "target" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN target TEXT")
+        conn.commit()
+    finally:
+        conn.close()
