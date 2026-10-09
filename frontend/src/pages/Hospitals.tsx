@@ -72,27 +72,6 @@ export function HospitalDetailPage({ id }: { id: string }) {
             </div>
           </Card>
 
-          <div className="grid gap-5 xl:grid-cols-2">
-            <Card title="Actions & alerts">
-              <ul className="space-y-1.5 text-xs leading-5">
-                {d.data.cells.filter((c) => c.risk !== "ok").map((c) => <li key={c.medicine}>• {c.message}</li>)}
-                {d.data.moves.map((mv) => <li key={mv.id} className="font-medium text-brand-ink">→ {mv.text}</li>)}
-                {d.data.orders.map((o) => <li key={o.medicine}>🚚 {o.text}</li>)}
-                {d.data.expiry.map((e) => <li key={e.batch_id} className="text-red-700">⏳ {e.reason}</li>)}
-              </ul>
-              {d.data.cells.every((c) => c.risk === "ok") && d.data.moves.length + d.data.orders.length + d.data.expiry.length === 0 && <p className="text-sm text-muted">Nothing needs attention.</p>}
-            </Card>
-            <Card title="Exchange activity">
-              {d.data.exchange.transfers.length === 0 ? <p className="text-sm text-muted">No transfers.</p> : (
-                <ul className="space-y-1.5 text-xs">
-                  {d.data.exchange.transfers.map((t) => (
-                    <li key={t.id} className="flex items-center gap-2"><b>#{t.id}</b> {t.from_id} → {t.to_id} <span className="num">{fmt(t.qty)} {t.medicine_id}</span><Pill>{t.status.replace("_", " ")}</Pill>{t.awaiting && <span className="text-muted">awaiting {t.awaiting}</span>}</li>
-                  ))}
-                </ul>
-              )}
-            </Card>
-          </div>
-
           <Card title="Batches" subtitle="First-expiry-first-out order" flush>
             <div className="max-h-96 overflow-auto px-5 pb-5 scroll-thin">
               <table className="num w-full text-xs">
