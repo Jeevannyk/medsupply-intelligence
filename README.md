@@ -58,6 +58,16 @@ It has its own database (`backend/carrier.db`), runs a trip in real time (`CARRI
 
 Flow: approve transfer → donor arranges delivery → dispatch (donor sees a 6-digit handover code) → the truck drives its route on the **Logistics** map for 30 seconds (`LOGISTICS_TRAVEL_SECONDS`, the demo's compressed trip time; the real road time stays on the transfer) → only once it has arrived can the receiver confirm with the code and the units actually accepted. The server refuses an earlier receipt even with the right code. Short or damaged units are recorded as discrepancies; stock changes only on confirmation. Choose **Acting as: District logistics office** to assign pool vehicles. The Logistics page has a demo clock and "Delay" buttons so a late trip, and the plan reacting to it, can be shown in seconds.
 
+### Importing real stock (CSV)
+
+The demo data is simulated, but real stock can be loaded: **Inventory → Import stock**. Download "current stock" as a template, edit it (or build your own with the same columns: `hospital_id, medicine_id, batch_id` (optional), `qty, expiry_date`), choose the file, check the preview, then **Apply import**.
+
+- The whole file is checked first and nothing is applied if any row is wrong (the errors list the row numbers).
+- A file replaces **all** stock of each hospital it contains. A hospital can import only its own rows; the network admin can import any.
+- It refuses while a transfer from that hospital is in progress. Importing recalculates risk, the plan and orders at once.
+- Only current stock is imported; the demand history behind the forecast stays as generated. **Reset demo** restores the simulated stock.
+- Try it with `samples/stock_update_B.csv` (cuts hospital B's ceftriaxone to 150 vials) and `samples/stock_update_INVALID.csv` (shows the row-by-row errors).
+
 ### Reset to a clean demo state
 
 Click **Reset demo** in the header (or `POST /api/reset`). It regenerates the database and clears all transfers, offers, requests and messages. Do this before each demo run.

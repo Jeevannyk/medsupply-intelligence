@@ -1,8 +1,10 @@
-import { Boxes, Layers } from "lucide-react";
+import { useState } from "react";
+import { Boxes, Layers, Upload } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell as RCell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { Cell } from "../api";
 import { AXIS, C, ChartTooltip, GRID } from "../components/charts";
-import { Card, RISK, Select, fmt } from "../components/ui";
+import { ImportStock } from "../components/ImportStock";
+import { Button, Card, RISK, Select, fmt } from "../components/ui";
 import { useApp } from "../context";
 import { go } from "../router";
 
@@ -61,6 +63,7 @@ export function RiskLegend() {
 
 export default function InventoryPage() {
   const { ov, meta, med, setMed, names } = useApp();
+  const [importing, setImporting] = useState(false);
   const cells = ov.cells.filter((c) => c.medicine === med);
   const data = cells.map((c) => ({ id: c.hospital, cover: c.days_of_cover ?? 0, lead: c.lead_days, risk: c.risk }));
   const totals = meta.medicines.map((m) => {
@@ -70,9 +73,11 @@ export default function InventoryPage() {
   return (
     <div className="space-y-5">
       <Card title="Network inventory" icon={<Boxes size={18} />} subtitle="Projected units (on hand + incoming − committed out) · days of cover · colour = shortage risk, all on the same basis, so they update as soon as a transfer is agreed. Hover a cell for the physical on-hand figure. Click a cell to forecast it, a hospital to open its page."
-        actions={<RiskLegend />}>
+        actions={<><RiskLegend /><Button size="sm" variant="secondary" icon={<Upload size={14} />} onClick={() => setImporting(!importing)}>Import stock</Button></>}>
         <InventoryGrid />
       </Card>
+
+      {importing && <ImportStock onClose={() => setImporting(false)} />}
 
       <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
         <Card title="Days of cover vs supplier lead time" icon={<Layers size={18} />}

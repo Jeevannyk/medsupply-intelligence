@@ -3,14 +3,14 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import json
 import os
 
-from . import generate, logistics
+from . import generate, logistics, stock_import
 from .assistant import Assistant
 from .config import DB_PATH, DEFAULT_WEIGHTS, SCENARIOS, TODAY
 from .db import ensure_schema
@@ -93,6 +93,28 @@ def hospital(hospital: str, request: Request, scenario: str = "outbreak"):
     d = engine.hospital_detail(check_scenario(scenario), hospital, weights_from(request))
     d["exchange"] = exchange.board(hospital)
     return clean(d)
+
+
+class StockImport(BaseModel):
+    csv: str                      # the file's text
+    actor: str                    # who is importing: a hospital id (own rows only) or NET (any)
+    apply: bool = False           # False = check and preview only, True = replace the stock
+
+
+@app.get("/api/import/stock/export")
+def export_stock():
+    """The current stock as a CSV, in exactly the format the import accepts (the template)."""
+    return Response(stock_import.export_csv(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="current_stock.csv"'})
+
+
+@app.post("/api/import/stock")
+def import_stock(body: StockImport):
+    """Replace a hospital's stock with the batches in a CSV. Always validates the whole file first; changes nothing unless apply=true."""
+    result = stock_import.run(body.csv, body.actor, set(engine.H), set(engine.M), body.apply)
+    if result["applied"]:
+        engine.invalidate()       # stock changed: recompute risk, plan and orders
+    return result
 
 
 @app.get("/api/road-paths")

@@ -1,0 +1,7 @@
+hospital_id,medicine_id,batch_id,qty,expiry_date
+B,OSEL,OSEL-B-01,2500,2026-11-03
+Z,OSEL,,100,2027-01-01
+B,PARACETAMOL,,100,2027-01-01
+B,CEFT,,-5,2027-01-01
+B,CEFT,,100,31/12/2027
+B,CEFT,,100,2020-01-01
